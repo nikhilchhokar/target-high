@@ -44,9 +44,11 @@ def bucket_summary(eb: pd.DataFrame) -> pd.DataFrame:
     return s.sort_values("loss", ascending=False)
 
 
-def pair_dump(d, mask, truth_map, recs: pd.DataFrame, feats: pd.DataFrame) -> pd.DataFrame:
-    """FP pairs, FN pairs that were candidates, and FN pairs lost at blocking - side by side."""
-    info = recs.set_index("entity_id")[["business_name", "business_address", "country"]]
+def pair_dump(d, mask, truth_map, raw_loader, feats: pd.DataFrame) -> pd.DataFrame:
+    """FP pairs, FN pairs that were candidates, and FN pairs lost at blocking - side by side.
+
+    raw_loader(ids) -> DataFrame[entity_id, business_name, business_address, country]
+    """
     y = [c in truth_map[s] for s, c in zip(d.s1, d.cand)]
     dd = d.assign(y=y, selected=mask)
     fp = dd[dd.selected & ~dd.y].assign(kind="FP")
@@ -55,8 +57,9 @@ def pair_dump(d, mask, truth_map, recs: pd.DataFrame, feats: pd.DataFrame) -> pd
     blocked = [(s, c) for s, v in truth_map.items() for c in v if (s, c) not in cand_pairs]
     fnb = pd.DataFrame(blocked, columns=["s1", "cand"]).assign(kind="FN_blocked", pa=float("nan"))
     out = pd.concat([fp, fn, fnb], ignore_index=True)[["kind", "s1", "cand", "pa"]]
-    key_feats = [c for c in ["cos_name_char", "n_tset", "a_tset", "postal_state", "num_state",
-                             "chain_s1", "ctx_rank_cos_name_char"] if c in feats.columns]
+    info = raw_loader(set(out.s1) | set(out.cand)).drop_duplicates("entity_id").set_index("entity_id")
+    key_feats = [c for c in ["sim_name", "sim_addr", "n_tset", "a_tset", "num_near", "postal_state",
+                             "chain_s1", "ctx_rank_prune_score"] if c in feats.columns]
     out = out.merge(feats[["s1", "cand"] + key_feats], on=["s1", "cand"], how="left")
     for side, col in (("s1", "s1"), ("c", "cand")):
         j = info.reindex(out[col].values).reset_index(drop=True)

@@ -10,3 +10,5 @@ output/
 reports/
 __pycache__/
 *.egg-info/
+work*/
+*.log

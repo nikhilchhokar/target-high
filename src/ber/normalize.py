@@ -10,6 +10,7 @@ import unicodedata
 import pandas as pd
 
 from . import dictionaries as D
+from .translit import indic_to_latin, has_indic
 
 _ALL_LEGAL = set().union(*D.LEGAL_TOKENS.values())
 _NON_ALNUM = re.compile(r"[^a-z0-9]+")
@@ -18,10 +19,13 @@ _APOS = re.compile(r"['’`]")
 _DIGITS = re.compile(r"\d+")
 _VOWELS = re.compile(r"[aeiouy]")
 _SKEL_MAP = [("x", "ks"), ("ph", "f"), ("sh", "s"), ("kh", "k"), ("gh", "g"), ("th", "t"),
-             ("bh", "b"), ("dh", "d"), ("ck", "k"), ("q", "k"), ("w", "v"), ("z", "s")]
+             ("bh", "b"), ("dh", "d"), ("ck", "k"), ("q", "k"), ("w", "v"), ("z", "s"),
+             ("b", "p"), ("d", "t"), ("g", "k")]
 
 
 def strip_accents(s: str) -> str:
+    if s.isascii():
+        return s
     s = unicodedata.normalize("NFKD", s)
     return "".join(ch for ch in s if not unicodedata.combining(ch))
 
@@ -99,7 +103,7 @@ def skeleton(token: str) -> str:
 
 
 def normalize_name(raw: str, cc: str) -> dict:
-    text = strip_accents(str(raw).lower())
+    text = strip_accents(indic_to_latin(str(raw)).lower())
     parts = re.split(D.DBA_PATTERN, text, maxsplit=1)
     main, dba = parts[0], (parts[1] if len(parts) > 1 else "")
 
@@ -152,7 +156,7 @@ def _phrase_replace(text: str, table: dict) -> str:
 
 
 def normalize_address(raw: str, cc: str) -> dict:
-    text = strip_accents(str(raw).lower())
+    text = strip_accents(indic_to_latin(str(raw)).lower())
     if cc == "fr":
         text = _FR_POSTBOX.sub(" ", text)
     postal, span = extract_postal(text, cc)
@@ -170,7 +174,7 @@ def normalize_address(raw: str, cc: str) -> dict:
     if cc == "in":
         toks = [D.IN_STATES.get(t, t) for t in toks]
     nums = {n.lstrip("0") or "0" for t in toks for n in _DIGITS.findall(t) if len(n) <= 6}
-    core = [t for t in toks if not any(c.isdigit() for c in t) and t not in D.ADDR_STOPWORDS]
+    core = [t for t in toks if len(t) > 1 and not any(c.isdigit() for c in t) and t not in D.ADDR_STOPWORDS]
     lm_toks = []
     for lm in landmarks:
         lm_toks += basic_tokens(lm, cc)
@@ -195,4 +199,5 @@ def normalize_records(recs: pd.DataFrame) -> pd.DataFrame:
     # fall back so no view is empty when the raw field has content
     out["name_core"] = out.name_core.where(out.name_core != "", out.name_clean)
     out["name_addr"] = (out.name_core + " " + out.addr_core).str.strip()
+    out["name_indic"] = [has_indic(n) for n in out.business_name]
     return out

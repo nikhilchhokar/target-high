@@ -37,13 +37,17 @@ NAME_ABBR = {
         "labs": "laboratories", "lab": "laboratory", "coop": "cooperative",
         "trdrs": "traders", "agncy": "agency", "agy": "agency", "jewelers": "jewellers",
         "colour": "color",
+        # common outputs of translit.indic_to_latin for English loanwords
+        "praivet": "private", "piraivet": "private", "prayivet": "private", "limitet": "limited",
+        "limited": "limited", "elelapi": "llp", "elelpi": "llp", "kampani": "company",
+        "kampni": "company", "kompani": "company",
     },
     "fr": {"st": "saint", "gd": "grand", "gde": "grande"},
     "us": {}, "in": {},
 }
 
 NAME_STOPWORDS = {"the", "and", "of", "a", "an", "le", "la", "les", "l", "de", "du",
-                  "des", "d", "et", "en", "au", "aux"}
+                  "des", "d", "et", "en", "au", "aux", "ms", "m/s"}
 
 DBA_PATTERN = r"\b(?:d\s*/\s*b\s*/\s*a|dba|t\s*/\s*a|trading as|a\s*/\s*k\s*/\s*a|aka|formerly)\b"
 
@@ -109,11 +113,16 @@ IN_STATES = {  # full name -> single canonical token; plus unambiguous short for
     "hr": "haryana", "pb": "punjab", "kl": "kerala", "wb": "westbengal", "dl": "delhi",
     "mp": "madhyapradesh", "jk": "jammukashmir", "hp": "himachalpradesh",
     "up": "uttarpradesh", "uk": "uttarakhand",
+    # transliterated native-script state names (translit.indic_to_latin output)
+    "maharashtr": "maharashtra", "dilli": "delhi", "karnatak": "karnataka",
+    "pashchim bangal": "westbengal", "telangan": "telangana", "keral": "kerala",
+    "hariyana": "haryana", "panjab": "punjab", "tamil natu": "tamilnadu", "tamilnatu": "tamilnadu",
+    "rajasthan": "rajasthan", "gujarat": "gujarat", "bihar": "bihar",
 }
 
 ADDR_STOPWORDS = {"the", "and", "of", "no", "nos", "number", "de", "la", "du", "des",
                   "le", "les", "l", "d", "india", "usa", "france", "cedex",
-                  "bis", "ter", "quater"}
+                  "bis", "ter", "quater", "null", "na", "none"}
 
 LANDMARK_PATTERN = (r"\b(?:near|nr|opp|opposite|behind|beside|besides|next to|adjacent to|adj"
                     r"|in front of|close to|pres de|pres du|en face de|en face du|a cote de"

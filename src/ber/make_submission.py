@@ -18,22 +18,22 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from . import io, pipeline, model, decide, run_experiment
+from . import io, pipeline, prep, model, decide, run_experiment
 
 
-def self_check(match_map, cand_map, s1_ids, pool_ids):
+def self_check(match_map, cand_map, s1_ids):
     """Mirror of the official rules so a bad file never costs a submission."""
     issues = []
-    pool = set(pool_ids)
-    for s in s1_ids:
-        m, c = match_map.get(s, []), cand_map.get(s, [])
+    s1_set = set(s1_ids)
+    for s, c in cand_map.items():
+        m = match_map.get(s, [])
         if len(m) != len(set(m)) or len(c) != len(set(c)):
             issues.append(f"duplicate ids for {s}")
-        if not set(m) <= pool or not set(c) <= pool:
-            issues.append(f"id outside test S2/S3 for {s}")
+        if any(not x.startswith(("S2-", "S3-")) for x in c):
+            issues.append(f"non S2/S3 id for {s}")
         if not set(m) <= set(c):
             issues.append(f"match not in candidates for {s}")
-    extra = set(match_map) - set(s1_ids)
+    extra = (set(match_map) | set(cand_map)) - s1_set
     if extra:
         issues.append(f"{len(extra)} unknown S1 ids")
     return issues
@@ -49,31 +49,37 @@ def main():
     paths = cfg["paths"]
     t0 = time.time()
 
-    test = pipeline.build_split(cfg, "test")
-    recs, feats = test["recs"], test["feats"]
-    s1_ids = recs.entity_id[recs.src == 1].tolist()
-    pool_ids = recs.entity_id[recs.src != 1].tolist()
-    cand_map = feats.groupby("s1", sort=False).cand.apply(list).to_dict()
-
     if args.empty:
-        sub_id, res, match_map = "probe_empty", {"exp_id": "empty"}, {}
+        prep.prep_split(cfg, "test")
+        s1_ids = prep.load(cfg, "test", [1], ["entity_id"]).entity_id.tolist()
+        sub_id, res, match_map, cand_map = "probe_empty", {"exp_id": "empty"}, {}, {}
     else:
         res = run_experiment.run(cfg, write=True)
-        tr = pipeline.build_split(cfg, "train", verbose=False)["feats"]
+        tr = pipeline.build_train(cfg)
+        feats_tr, s1_tr = tr["feats"], tr["s1"]
         truth = io.load_ground_truth(Path(paths["data_dir"]) / "train" / "train_ground_truth.tsv",
-                                     tr.s1.unique().tolist())
-        y = np.fromiter((c in truth.get(s, ()) for s, c in zip(tr.s1, tr.cand)), bool, len(tr)).astype(int)
+                                     s1_tr.entity_id.tolist())
+        y = np.fromiter((c in truth[s] for s, c in zip(feats_tr.s1, feats_tr.cand)), bool, len(feats_tr)).astype(int)
         n_iter = int(np.median(res["iters"]) * cfg["model"].get("full_iter_mult", 1.1))
-        models = model.train_full(tr[res["fcols"]], y, cfg["model"], n_iter)
-        feats = feats.assign(p=model.predict(models, feats[res["fcols"]]))
-        d = decide.prepare(feats, cfg["decision"].get("one_to_one", True))
+        models = model.train_full(feats_tr[res["fcols"]], y, cfg["model"], n_iter)
+        del feats_tr, tr
+        scored = []
+        for bc, qq, f in pipeline.iter_test(cfg):
+            if f is None or len(f) == 0:
+                continue
+            scored.append(f[["s1", "cand", "cand_src"]].assign(p=model.predict(models, f[res["fcols"]]).astype(np.float32)))
+        scored = pd.concat(scored, ignore_index=True)
+        cache = Path(paths.get("cache_dir", "cache"))
+        cache.mkdir(exist_ok=True)
+        scored.to_parquet(cache / f"test_scores_{res['exp_id']}.parquet")  # re-decide later without recompute
+        d = decide.prepare(scored, cfg["decision"].get("one_to_one", True))
         mask = decide.select(d, res["t_first"], res["t_other"], res["t_extra"])
         match_map = decide.to_map(d, mask)
-        # keep candidate order = model score order for readability
         cand_map = d.groupby("s1", sort=False).cand.apply(list).to_dict()
         sub_id = res["exp_id"]
+        s1_ids = prep.load(cfg, "test", [1], ["entity_id"]).entity_id.tolist()
 
-    issues = self_check(match_map, cand_map, s1_ids, pool_ids)
+    issues = self_check(match_map, cand_map, s1_ids)
     if issues:
         print("[FAIL] self-check:\n  " + "\n  ".join(issues[:20]))
         sys.exit(1)
@@ -103,7 +109,7 @@ def main():
 
     sizes = np.array([len(cand_map.get(s, ())) for s in s1_ids])
     n_pred = np.array([len(match_map.get(s, ())) for s in s1_ids])
-    bc = recs[recs.src == 1].bc.values
+    bc = prep.load(cfg, "test", [1], ["entity_id", "bc"]).set_index("entity_id").bc.reindex(s1_ids).values
     pred_single = {f"pred_singleton_rate_{c}": float((n_pred[bc == c] == 0).mean()) for c in np.unique(bc)}
     sha, dirty = run_experiment.git_info()
     row = {"sub_dir": out.name, "exp_id": res.get("exp_id"), "git_sha": sha, "dirty": dirty,

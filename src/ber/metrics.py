@@ -63,8 +63,7 @@ def paired_delta(scores_a: pd.Series, scores_b: pd.Series) -> tuple:
     return float(d.mean()), float(d.std(ddof=1) / np.sqrt(max(len(d), 1)))
 
 
-def blocking_metrics(cand_map: dict, truth_map: dict, n_pool: int, union: pd.DataFrame = None,
-                     id_of=None) -> dict:
+def blocking_metrics(cand_map: dict, truth_map: dict, n_pool: int, union: pd.DataFrame = None) -> dict:
     """Recall ceiling (pair + entity/oracle macro F0.5) and candidate-set size stats."""
     sizes = np.array([len(cand_map.get(k, ())) for k in truth_map])
     n_gt = sum(len(v) for v in truth_map.values())
@@ -78,11 +77,10 @@ def blocking_metrics(cand_map: dict, truth_map: dict, n_pool: int, union: pd.Dat
         "pct_zero_cand": float((sizes == 0).mean()),
         "reduction_ratio": 1 - sizes.sum() / max(len(truth_map) * n_pool, 1),
     }
-    if union is not None and id_of is not None:
-        # recall@k of the pre-prune union ordered by prune_score
-        pos = set((s, c) for s, v in truth_map.items() for c in v)
-        u = union.assign(s1=id_of[union.qi.values], cand=id_of[union.pj.values])
-        u["is_pos"] = [(a, b) in pos for a, b in zip(u.s1, u.cand)]
+    if union is not None:
+        # recall@k of the pre-prune union (columns s1, cand, prune_rank) ordered by prune_score
+        u = union
+        u = u.assign(is_pos=[c in truth_map.get(s, ()) for s, c in zip(u.s1, u.cand)])
         for k in (1, 2, 3, 5, 10, 20, 50):
             out[f"union_recall@{k}"] = float(u.is_pos[u.prune_rank <= k].sum() / max(n_gt, 1))
         out["union_recall_all"] = float(u.is_pos.sum() / max(n_gt, 1))

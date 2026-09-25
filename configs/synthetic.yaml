@@ -1,4 +1,7 @@
 inherit: base.yaml
 exp_id: synth
 note: "smoke test on synthetic data"
-paths: {data_dir: data_synth, cache_dir: cache_synth, results_dir: results_synth, submissions_dir: submissions_synth, validator: ""}
+workers: 2
+sample: {n_s1: null, seed: 42}
+blocking: {query_chunk: 1000}
+paths: {data_dir: data_synth, work_dir: work_synth, cache_dir: cache_synth, results_dir: results_synth, submissions_dir: submissions_synth, validator: ""}

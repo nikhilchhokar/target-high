@@ -36,17 +36,15 @@ def _thr(best):
 def run(cfg: dict, write: bool = True) -> dict:
     t_start = time.time()
     exp_id = cfg["exp_id"]
-    built = pipeline.build_split(cfg, "train")
-    recs, union, feats = built["recs"], built["union"], built["feats"]
-    s1 = recs[recs.src == 1]
+    built = pipeline.build_train(cfg)
+    union, feats, s1 = built["union"], built["feats"], built["s1"]
     truth = io.load_ground_truth(Path(cfg["paths"]["data_dir"]) / "train" / "train_ground_truth.tsv",
                                  s1.entity_id.tolist())
     s1_country = dict(zip(s1.entity_id, s1.bc))
     cand_map = feats.groupby("s1").cand.apply(list).to_dict()
 
     # ---- blocking (measured independently of the model)
-    bm = metrics.blocking_metrics(cand_map, truth, int((recs.src != 1).sum()), union,
-                                  recs.entity_id.values)
+    bm = metrics.blocking_metrics(cand_map, truth, built["n_pool"], union)
 
     # ---- model (out-of-fold, grouped by S1)
     t0 = time.time()
@@ -95,7 +93,8 @@ def run(cfg: dict, write: bool = True) -> dict:
         "raw_best": best["raw_best"], **bm, **bd, **loco,
         "ece": rel["ece"], "n_pairs": int(len(feats)), "pos_rate": float(y.mean()),
         "best_iter_median": int(np.median(iters)), "n_features": len(fcols),
-        "runtime_train_s": t_train, **{f"runtime_{k}": v for k, v in built["timings"].items()},
+        "n_s1_eval": len(s1), "runtime_train_s": t_train,
+        **{f"runtime_{k}": v for k, v in built["timings"].items()},
         "runtime_total_s": time.time() - t_start,
     }
     _print_summary(res, bsum)
@@ -111,7 +110,8 @@ def run(cfg: dict, write: bool = True) -> dict:
         imp.rename("gain_share").to_csv(out / "feature_importance.csv", index_label="feature")
         eb.to_csv(out / "errors_entities.csv", index=False)
         bsum.to_csv(out / "error_buckets.csv")
-        errors.pair_dump(d, mask, truth, recs, feats).to_csv(out / "errors_pairs.csv", index=False)
+        errors.pair_dump(d, mask, truth, lambda ids: pipeline.load_raw(cfg, "train", ids),
+                         feats).to_csv(out / "errors_pairs.csv", index=False)
         row = {k: v for k, v in res.items() if not isinstance(v, (dict, list))}
         lb = Path(cfg["paths"].get("results_dir", "results")) / "leaderboard.csv"
         pd.concat([pd.read_csv(lb), pd.DataFrame([row])] if lb.exists() else [pd.DataFrame([row])],
@@ -121,35 +121,49 @@ def run(cfg: dict, write: bool = True) -> dict:
 
 
 def run_blocking_only(cfg: dict) -> dict:
-    """Blocking metrics on train without training anything (seconds, not minutes)."""
-    b = pipeline.build_blocking(cfg, "train")
-    recs = b["recs"]
-    s1 = recs[recs.src == 1]
+    """Blocking recall / ceiling / size on the train sample, without features or a model."""
+    from . import prep, retrieve
+    t0 = time.time()
+    prep.prep_split(cfg, "train")
+    s1_all = prep.load(cfg, "train", [1], pipeline.Q_COLS)
+    n = cfg.get("sample", {}).get("n_s1")
+    sample = set(s1_all.entity_id.sample(n=min(n, len(s1_all)), random_state=cfg["sample"].get("seed", 42))
+                 if n else s1_all.entity_id)
+    unions, n_pool = [], 0
+    for bc in sorted(s1_all.bc.unique()):
+        pool = prep.load(cfg, "train", [2, 3], pipeline.Q_COLS, bc=bc)
+        n_pool += len(pool)
+        s1c = s1_all[s1_all.bc == bc]
+        q = s1c[s1c.entity_id.isin(sample)].reset_index(drop=True)
+        idx = retrieve.CountryIndex(pool, s1c, cfg["blocking"], cfg.get("threads", 7))
+        for s in range(0, len(q), cfg["blocking"].get("query_chunk", 200_000)):
+            qq = q.iloc[s:s + cfg["blocking"].get("query_chunk", 200_000)].reset_index(drop=True)
+            u, _ = idx.query(qq)
+            u = u.assign(s1=qq.entity_id.values[u.qi.values], cand=idx.pool.entity_id.values[u.pj.values])
+            unions.append(u.drop(columns=["qi", "pj"]))
+        del idx, pool
+    union = pd.concat(unions, ignore_index=True)
+    prune = cfg["blocking"].get("prune", {})
+    keep = (union.prune_rank <= prune.get("max_k", 15)) & (union.prune_score >= prune.get("min_score", 0.0))
+    s1 = s1_all[s1_all.entity_id.isin(sample)]
     truth = io.load_ground_truth(Path(cfg["paths"]["data_dir"]) / "train" / "train_ground_truth.tsv",
                                  s1.entity_id.tolist())
-    cand_map = b["cands"].groupby("s1").cand.apply(list).to_dict()
-    bm = metrics.blocking_metrics(cand_map, truth, int((recs.src != 1).sum()), b["union"],
-                                  recs.entity_id.values)
-    # unique true pairs contributed by each retriever (drop retrievers that add none)
-    ids = recs.entity_id.values
-    u = b["union"].assign(s1=ids[b["union"].qi.values], cand=ids[b["union"].pj.values])
-    u["is_pos"] = [c in truth[s] for s, c in zip(u.s1, u.cand)]
-    found = {}
+    cand_map = union[keep].groupby("s1").cand.apply(list).to_dict()
+    bm = metrics.blocking_metrics(cand_map, truth, n_pool, union)
+    union["is_pos"] = [c in truth[s] for s, c in zip(union.s1, union.cand)]
     for r in cfg["blocking"]["retrievers"]:
-        n = r["name"]
-        found[n] = (u[f"{n}_rank"] <= r["k"]) if r["type"] == "tfidf" else (u[f"{n}_hit"] == 1)
-    for n, f in found.items():
-        others = np.zeros(len(u), bool)
-        for m, g in found.items():
-            if m != n:
-                others |= g.values
-        bm[f"unique_pos_{n}"] = int((u.is_pos & f.values & ~others).sum())
-        bm[f"cands_{n}_mean"] = float(f.sum() / len(s1))
-    bm["seconds"] = b["seconds"]
+        n_ = r["name"]
+        found = union[f"rank_{n_}"] <= r["k"]
+        others = np.zeros(len(union), bool)
+        for r2 in cfg["blocking"]["retrievers"]:
+            if r2["name"] != n_:
+                others |= (union[f"rank_{r2['name']}"] <= r2["k"]).values
+        bm[f"unique_pos_{n_}"] = int((union.is_pos & found & ~others).sum())
+    bm["seconds"] = time.time() - t0
     print(json.dumps({k: round(v, 4) if isinstance(v, float) else v for k, v in bm.items()}, indent=1))
     out = Path(cfg["paths"].get("results_dir", "results")) / cfg["exp_id"]
     out.mkdir(parents=True, exist_ok=True)
-    (out / "blocking.json").write_text(json.dumps(bm, indent=2))
+    (out / "blocking.json").write_text(json.dumps(bm, indent=2, default=float))
     return bm
 
 
