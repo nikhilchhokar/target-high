@@ -1,0 +1,5 @@
+inherit: ../base.yaml
+exp_id: e002
+parent: e001
+note: "ablation: no context features"
+features: {version: f1, context: false}

@@ -1,0 +1,4 @@
+inherit: base.yaml
+exp_id: synth
+note: "smoke test on synthetic data"
+paths: {data_dir: data_synth, cache_dir: cache_synth, results_dir: results_synth, submissions_dir: submissions_synth, validator: ""}

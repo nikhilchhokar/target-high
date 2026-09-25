@@ -1,0 +1,12 @@
+.venv/
+data/
+data_synth/
+cache*/
+results*/*
+!results/leaderboard.csv
+submissions*/*
+!submissions/registry.csv
+output/
+reports/
+__pycache__/
+*.egg-info/

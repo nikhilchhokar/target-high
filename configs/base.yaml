@@ -1,0 +1,36 @@
+# Base config. Experiments inherit from this and change ONE thing.
+exp_id: base
+parent: null
+note: "base config"
+paths:
+  data_dir: data                 # expects data/train/*.tsv and data/test/*.tsv
+  cache_dir: cache
+  results_dir: results
+  submissions_dir: submissions
+  validator: ../student_resource/utils/validate_submission.py   # official validator (adjust)
+normalize: {version: n1}
+blocking:
+  within_country: true           # set false if audit shows GT pairs cross country labels
+  retrievers:
+    - {name: name_char, type: tfidf, view: name_char, k: 30, min_sim: 0.2}
+    - {name: name_addr, type: tfidf, view: name_addr_word, k: 30, min_sim: 0.1}
+    - {name: postal_name, type: key, key: postal_name, max_bucket: 50}
+    - {name: num_street, type: key, key: num_street_name, max_bucket: 50}
+  prune: {score: mean, max_k: 10, min_score: 0.3, key_bonus: 0.2}
+features: {version: f1, context: true}
+model:
+  params: {n_estimators: 3000, learning_rate: 0.05, num_leaves: 63, min_child_samples: 50,
+           feature_fraction: 0.8, bagging_fraction: 0.8, bagging_freq: 1, reg_lambda: 1.0}
+  early_stopping: 100
+  cv: {folds: 5}
+  seeds: [42]
+  drop_features: []
+  full_iter_mult: 1.1
+decision:
+  one_to_one: true               # only valid if audit says one_to_one_holds
+  target_singleton_rate: null    # set from the all-empty LB probe if it differs from train
+  grid:                          # [lo, hi, step]
+    t_first: [0.05, 0.90, 0.025]
+    t_other: [0.10, 0.95, 0.05]
+    t_extra: [0.20, 0.95, 0.05]
+loco: true                       # leave-one-country-out (France proxy)

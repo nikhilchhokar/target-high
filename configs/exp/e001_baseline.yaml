@@ -1,0 +1,4 @@
+inherit: ../base.yaml
+exp_id: e001
+parent: null
+note: "baseline: full pipeline v1"
