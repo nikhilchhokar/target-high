@@ -1,4 +1,15 @@
 inherit: ../base.yaml
 exp_id: e001
 parent: null
-note: "baseline: full pipeline v1"
+note: "baseline on real data: 3 retrievers, 15 cands, LightGBM fast settings, no LOCO"
+model:
+  params: {n_estimators: 800, learning_rate: 0.1, num_leaves: 63, min_child_samples: 100, max_bin: 127,
+           feature_fraction: 0.8, bagging_fraction: 0.7, bagging_freq: 1, reg_lambda: 1.0, n_jobs: 8}
+  early_stopping: 50
+  cv: {folds: 3}
+decision:
+  grid:
+    t_first: [0.05, 0.85, 0.05]
+    t_other: [0.10, 0.90, 0.10]
+    t_extra: [0.10, 0.90, 0.05]
+loco: false

@@ -60,6 +60,7 @@ def run(cfg: dict, write: bool = True) -> dict:
     one_to_one = dcfg.get("one_to_one", True)
     d = decide.prepare(feats, one_to_one)
     scorer = decide.Scorer(d, truth, dcfg.get("target_singleton_rate"))
+    print(f"[decide] grid search over thresholds ({len(d)} pairs)", flush=True)
     best, curve = decide.grid_search(d, scorer, dcfg["grid"])
     mask = decide.select(d, *_thr(best))
     pred_map = decide.to_map(d, mask)
