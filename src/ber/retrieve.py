@@ -23,13 +23,32 @@ def _prefix(series: pd.Series, p: str) -> pd.Series:
     return series.str.replace(r"(\S+)", p + r"\1", regex=True)
 
 
+def _num_tokens(df) -> pd.Series:
+    """'#1323 #132' - full numbers plus a 3-digit prefix, so a dropped trailing/middle digit
+    (1323 vs 132, 5930 vs 593, 2777 vs 277) still shares a token."""
+    out = []
+    for h, u in zip(df.house_nums, df.units):
+        toks = []
+        for n in (h + " " + u).split():
+            toks.append("#" + n)
+            if len(n) >= 4:
+                toks.append("#" + n[:3])
+        out.append(" ".join(toks))
+    return pd.Series(out, index=df.index, dtype="str")
+
+
 def name_docs(df):
     return df.name_core + " " + _prefix(df.name_skel, "~")
 
 
 def addr_docs(df):
-    return (df.addr_core + " " + _prefix(df.house_nums + " " + df.units, "#") + " "
-            + _prefix(df.postal, "@"))
+    return df.addr_core + " " + _num_tokens(df) + " " + _prefix(df.postal, "@")
+
+
+def name_addr_docs(df):
+    """Name AND address in one vector: a true match must agree on both to rank high, which
+    beats generic names ('Eye Clinic') and dense streets (many businesses x ~4.5 copies)."""
+    return name_docs(df) + " " + addr_docs(df)
 
 
 class HashedTfidf:
@@ -62,7 +81,7 @@ class HashedTfidf:
         return l2_normalize(X, copy=False)
 
 
-DOCS = {"name": name_docs, "addr": addr_docs}
+DOCS = {"name": name_docs, "addr": addr_docs, "name_addr": name_addr_docs}
 
 
 def _rowwise_dot(A, B, i, j, chunk=500_000):

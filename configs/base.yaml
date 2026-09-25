@@ -19,6 +19,7 @@ blocking:
   retrievers:                    # word TF-IDF; tokens with doc-freq > max_df are dropped from retrieval
     - {name: name, view: name, k: 25, min_sim: 0.1, max_df: 20000}
     - {name: addr, view: addr, k: 25, min_sim: 0.1, max_df: 20000}
+    - {name: name_addr, view: name_addr, k: 25, min_sim: 0.1, max_df: 20000}
   prune: {score: mean, max_k: 15, min_score: 0.05}
 features: {version: f2}
 model:

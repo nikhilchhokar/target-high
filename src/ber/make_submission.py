@@ -54,7 +54,14 @@ def main():
         s1_ids = prep.load(cfg, "test", [1], ["entity_id"]).entity_id.tolist()
         sub_id, res, match_map, cand_map = "probe_empty", {"exp_id": "empty"}, {}, {}
     else:
-        res = run_experiment.run(cfg, write=True)
+        # reuse the train experiment's thresholds / iteration count if it ran with this exact config
+        saved = Path(paths.get("results_dir", "results")) / cfg["exp_id"] / "metrics.json"
+        m = json.loads(saved.read_text()) if saved.exists() else {}
+        if m.get("cfg_hash") == pipeline.stable_hash(cfg):
+            print(f"[reuse] thresholds and iterations from {saved}")
+            res = {**m, "fcols": m["features"], "iters": [m["best_iter_median"]]}
+        else:
+            res = run_experiment.run(cfg, write=True)
         tr = pipeline.build_train(cfg)
         feats_tr, s1_tr = tr["feats"], tr["s1"]
         truth = io.load_ground_truth(Path(paths["data_dir"]) / "train" / "train_ground_truth.tsv",
