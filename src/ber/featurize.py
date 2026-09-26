@@ -45,6 +45,15 @@ def _num_near(a: str, b: str) -> int:
     return int(any(_drop_one(x, y) or _drop_one(y, x) for x in sa for y in sb))
 
 
+_LEGAL_CANON = {"pvt": "private", "p": "private", "pvtltd": "private limited", "ltd": "limited",
+                "inc": "incorporated", "corp": "corporation", "co": "company", "cie": "compagnie",
+                "ets": "etablissements", "ste": "societe"}
+
+
+def _canon_legal(s: str) -> str:
+    return " ".join(sorted({w for t in s.split() for w in _LEGAL_CANON.get(t, t).split()}))
+
+
 def _num_diffs(a: str, b: str):
     """House-number arithmetic. Decoy records shift the real number by a small POSITIVE offset
     (+1..+21); true copies keep it, drop a digit (2777->277) or zero-pad it.
@@ -99,6 +108,12 @@ def features_chunk(P: pd.DataFrame, idf: dict) -> pd.DataFrame:
     F["n_acronym"] = [float(bool(x) and (x == b.replace(" ", "") or y == a.replace(" ", "")))
                       for a, b, x, y in zip(na, nb, P.a_name_acr, P.b_name_acr)]
     F["legal_state"] = [_set_state(a, b) for a, b in zip(P.a_legal, P.b_legal)]
+    # canonical legal form: 'pvt ltd' == 'private limited'; distinguishes chain members
+    # (63% of same-name S1 groups differ in legal form)
+    ca = [_canon_legal(x) for x in P.a_legal]
+    cb = [_canon_legal(x) for x in P.b_legal]
+    F["legal_canon_state"] = [_set_state(a, b) for a, b in zip(ca, cb)]
+    F["n_full_tsort"] = [fuzz.token_sort_ratio(f"{a} {x}", f"{b} {y}") for a, b, x, y in zip(na, nb, ca, cb)]
     F["n_dba_best"] = [max(fuzz.token_set_ratio(a, db) if db else 0, fuzz.token_set_ratio(da, b) if da else 0)
                        for a, b, da, db in zip(na, nb, P.a_dba_core, P.b_dba_core)]
     F["name_num_state"] = [_set_state(a, b) for a, b in zip(P.a_name_nums, P.b_name_nums)]
