@@ -114,7 +114,8 @@ def name_docs(df):
     names = (df.name_core + " " + df.dba_core).str.strip()
     return (names + " " + _prefix(df.name_skel, "~") + " " + _bigrams(df.name_core, sort=True)
             + " " + _bigrams(df.dba_core, sort=True) + " " + _joined(df.name_core) + " "
-            + _joined(df.dba_core) + " " + _tag(df.name_core, df.region))
+            + _joined(df.dba_core) + " " + _tag(df.name_core, df.region)
+            + " " + _tag(_prefix(df.name_skel, "~"), df.region))  # '~svstk@bihar': translit/typos
 
 
 def addr_docs(df):
@@ -262,15 +263,26 @@ class CountryIndex:
             part = pd.DataFrame({"qi": rows, "pj": C.indices.astype(np.int64), "s": C.data})
             part = part.sort_values(["qi", "s"], ascending=[True, False], kind="stable")
             part[f"rank_{r['name']}"] = part.groupby("qi").cumcount() + 1
-            parts.append(part[["qi", "pj", f"rank_{r['name']}"]])
+            part[f"s_{r['name']}"] = part.s.astype(np.float32)
+            parts.append(part[["qi", "pj", f"rank_{r['name']}", f"s_{r['name']}"]])
         union = parts[0]
         for p in parts[1:]:
             union = union.merge(p, on=["qi", "pj"], how="outer")
         for r in self.cfg["retrievers"]:
             union[f"rank_{r['name']}"] = union[f"rank_{r['name']}"].fillna(r["k"] + 1).astype(np.int16)
         qi, pj = union.qi.values, union.pj.values
-        for v in self.vecs:  # exact cosine in every view for every union pair
-            union[f"sim_{v}"] = _rowwise_dot(A[v], self.B[v], qi, pj)
+        for v in self.vecs:  # exact cosine in every view: reuse the retriever's own score, compute the rest
+            col = np.full(len(union), np.nan, np.float32)
+            for r in self.cfg["retrievers"]:
+                if r["view"] == v:
+                    got = union[f"s_{r['name']}"].values
+                    fill = np.isnan(col) & ~np.isnan(got)
+                    col[fill] = got[fill]
+            miss = np.isnan(col)
+            if miss.any():
+                col[miss] = _rowwise_dot(A[v], self.B[v], qi[miss], pj[miss])
+            union[f"sim_{v}"] = col
+        union = union.drop(columns=[f"s_{r['name']}" for r in self.cfg["retrievers"]])
         union["n_retr"] = sum((union[f"rank_{r['name']}"] <= r["k"]).astype(np.int8)
                               for r in self.cfg["retrievers"])
         sims = union[[f"sim_{v}" for v in self.vecs]]

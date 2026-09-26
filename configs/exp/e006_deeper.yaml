@@ -1,0 +1,11 @@
+inherit: e005_pruner.yaml
+exp_id: e006
+parent: e005
+note: "deeper retrieval (k 60) + region-tagged skeleton tokens + 25 candidates via retrained pruner"
+blocking:
+  retrievers:
+    - {name: name, view: name, k: 60, min_sim: 0.05, max_df: 20000}
+    - {name: addr, view: addr, k: 60, min_sim: 0.05, max_df: 20000}
+    - {name: name_addr, view: name_addr, k: 60, min_sim: 0.05, max_df: 20000}
+  prune: {score: model, model: C:/Users/chhav/ber_work/cache/pruner_e006.txt, max_k: 25, min_score: 0.0}
+  query_chunk: 150000
