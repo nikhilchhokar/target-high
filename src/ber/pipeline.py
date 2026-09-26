@@ -16,7 +16,7 @@ import pandas as pd
 import pyarrow.dataset as ds
 import yaml
 
-from . import prep, retrieve, featurize
+from . import prep, retrieve, featurize, fr_admin
 
 SRC_DIR = Path(__file__).parent
 STAGE_FILES = ["retrieve.py", "featurize.py", "pipeline.py"]
@@ -62,6 +62,8 @@ def _country_runs(cfg, split, s1_all, q_filter=None):
         t0 = time.time()
         pool = prep.load(cfg, split, [2, 3], Q_COLS, bc=bc)
         s1c = s1_all[s1_all.bc == bc]
+        if bc == "fr" and cfg.get("fr_admin_cleanup", True):  # region/departement noise (see fr_admin.py)
+            pool, s1c = fr_admin.clean_frame(pool), fr_admin.clean_frame(s1c)
         q = s1c if q_filter is None else s1c[s1c.entity_id.isin(q_filter)]
         if len(pool) == 0 or len(q) == 0:
             yield bc, q.reset_index(drop=True), None, None
