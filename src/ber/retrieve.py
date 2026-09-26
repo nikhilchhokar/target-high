@@ -8,15 +8,20 @@ the sparse product stays cheap; top-k per query uses sparse_dot_topn (Apache-2.0
 The union is pruned to max_k per S1 by the mean of the two cosines -> candidate_pairs.tsv.
 """
 import math
+import re
 from collections import Counter
+from concurrent.futures import ProcessPoolExecutor, wait, FIRST_COMPLETED
 
 import numpy as np
 import pandas as pd
+import scipy.sparse as sp
 from sklearn.feature_extraction.text import HashingVectorizer
 from sklearn.preprocessing import normalize as l2_normalize
 from sparse_dot_topn import sp_matmul_topn
 
-N_FEATURES = 2 ** 22  # hashed vocabulary size; no Python vocabulary dict -> low memory
+from . import dictionaries as D
+
+N_FEATURES = 2 ** 24  # hashed vocabulary size (bigrams need room); no vocabulary dict -> low memory
 
 
 def _prefix(series: pd.Series, p: str) -> pd.Series:
@@ -37,12 +42,85 @@ def _num_tokens(df) -> pd.Series:
     return pd.Series(out, index=df.index, dtype="str")
 
 
+_US_ABBR = set(D.US_STATES.values())
+_US_FULL = {k.upper(): v for k, v in D.US_STATES.items()}
+_IN_REGION = set(D.IN_STATES.values()) | {
+    "goa", "assam", "odisha", "jharkhand", "chhattisgarh", "tripura", "sikkim", "manipur",
+    "meghalaya", "mizoram", "nagaland", "chandigarh", "puducherry", "andhrapradesh"}
+_UPPER2 = re.compile(r"(?<![A-Z])([A-Z]{2})(?![A-Z])")  # standalone 2-letter codes
+
+
+def region_of(df) -> pd.Series:
+    """Coarse region per record: US state (from the RAW address, because the cleaned one maps
+    CT->court, FL->floor), Indian state token, else the first 2 postcode digits (France: departement)."""
+    out = []
+    for bc, raw, core, postal in zip(df.bc, df.business_address, df.addr_core, df.postal):
+        r = ""
+        if bc == "us":
+            up = raw.upper()
+            codes = [c.lower() for c in _UPPER2.findall(up) if c.lower() in _US_ABBR]
+            if codes:
+                r = codes[-1]
+            else:
+                for full, ab in _US_FULL.items():
+                    if full in up:
+                        r = ab
+                        break
+        elif bc == "in":
+            for t in reversed(core.split()):
+                if t in _IN_REGION:
+                    r = t
+                    break
+        if not r and postal:
+            r = postal[:2]
+        out.append(r)
+    return pd.Series(out, index=df.index, dtype="str")
+
+
+def _bigrams(series: pd.Series, sep="|", sort=False) -> pd.Series:
+    out = []
+    for s in series:
+        t = s.split()
+        pairs = zip(t, t[1:])
+        out.append(" ".join((sep.join(sorted(p)) if sort else sep.join(p)) for p in pairs))
+    return pd.Series(out, index=series.index, dtype="str")
+
+
+def _tag(series: pd.Series, region: pd.Series) -> pd.Series:
+    """'clark industries' + 'az' -> 'clark@az industries@az' (common words become specific)."""
+    return pd.Series([" ".join(f"{t}@{r}" for t in s.split()) if r else "" for s, r in zip(series, region)],
+                     index=series.index, dtype="str")
+
+
+def _joined(series: pd.Series) -> pd.Series:
+    """'emmy love dds' -> '=emmylove =emmylovedds': matches website/handle names written without
+    spaces ('@emmylove', 'maguiresprairiecafe.com')."""
+    out = []
+    for s in series:
+        t = [x for x in s.split() if x not in ("com", "www", "net", "org")]
+        toks = []
+        if len(t) >= 2:
+            toks.append("=" + "".join(t[:2]))
+        if len(t) >= 3:
+            toks.append("=" + "".join(t))
+        if len(t) == 1 and len(t[0]) >= 6:
+            toks.append("=" + t[0])
+        out.append(" ".join(toks))
+    return pd.Series(out, index=series.index, dtype="str")
+
+
 def name_docs(df):
-    return df.name_core + " " + _prefix(df.name_skel, "~")
+    """Name unigrams (+ DBA part) + skeleton + order-free word pairs + joined forms + region tags."""
+    names = (df.name_core + " " + df.dba_core).str.strip()
+    return (names + " " + _prefix(df.name_skel, "~") + " " + _bigrams(df.name_core, sort=True)
+            + " " + _bigrams(df.dba_core, sort=True) + " " + _joined(df.name_core) + " "
+            + _joined(df.dba_core) + " " + _tag(df.name_core, df.region))
 
 
 def addr_docs(df):
-    return df.addr_core + " " + _num_tokens(df) + " " + _prefix(df.postal, "@")
+    """Address unigrams + house numbers + adjacent word pairs + postcode."""
+    return (df.addr_core + " " + _num_tokens(df) + " " + _bigrams(df.addr_core) + " "
+            + _prefix(df.postal, "@"))
 
 
 def name_addr_docs(df):
@@ -52,33 +130,61 @@ def name_addr_docs(df):
 
 
 class HashedTfidf:
-    """TF-IDF over hashed tokens: sublinear tf, smooth idf, tokens with df > max_df or
+    """TF-IDF over hashed token counts: sublinear tf, smooth idf, tokens with df > max_df or
     df < 2 get weight 0 (dropped from retrieval), rows L2-normalised."""
 
     def __init__(self, max_df: int):
-        self.hv = HashingVectorizer(token_pattern=r"\S+", lowercase=False, alternate_sign=False,
-                                    norm=None, n_features=N_FEATURES, dtype=np.float32)
         self.max_df = max_df
 
-    def fit_transform_pool(self, docs_pool, docs_other):
-        Xp = self.hv.transform(docs_pool).tocsr()
-        df = np.bincount(Xp.indices, minlength=N_FEATURES)
-        Xo = self.hv.transform(docs_other).tocsr()
-        df += np.bincount(Xo.indices, minlength=N_FEATURES)
+    def fit_weight_pool(self, Xp, Xo):
+        df = np.bincount(Xp.indices, minlength=N_FEATURES) + np.bincount(Xo.indices, minlength=N_FEATURES)
         n = Xp.shape[0] + Xo.shape[0]
-        del Xo
         idf = (np.log((n + 1) / (df + 1)) + 1).astype(np.float32)
         idf[(df > self.max_df) | (df < 2)] = 0.0
         self.idf = idf
-        return self._weight(Xp)
+        return self.weight(Xp)
 
-    def transform(self, docs):
-        return self._weight(self.hv.transform(docs).tocsr())
-
-    def _weight(self, X):
+    def weight(self, X):
         X.data = (1 + np.log(X.data)) * self.idf[X.indices]
         X.eliminate_zeros()
         return l2_normalize(X, copy=False)
+
+
+_HV = HashingVectorizer(token_pattern=r"\S+", lowercase=False, alternate_sign=False, norm=None,
+                        n_features=N_FEATURES, dtype=np.float32)
+_DOC_COLS = ["bc", "business_address", "addr_core", "postal", "name_core", "dba_core", "name_skel",
+             "house_nums", "units", "region"]
+
+
+def _hash_chunk(df: pd.DataFrame, views):
+    """Build every view's document and hash it (runs in a worker process)."""
+    if "region" not in df:
+        df = df.assign(region=region_of(df))
+    name, addr = name_docs(df), addr_docs(df)
+    docs = {"name": name, "addr": addr, "name_addr": name + " " + addr}
+    return {v: _HV.transform(docs[v]).tocsr() for v in views}, df.region.values
+
+
+def hash_views(df: pd.DataFrame, views, workers: int = 7, chunk: int = 100_000):
+    """Parallel doc building + hashing -> ({view: count CSR}, region array), rows aligned with df."""
+    cols = [c for c in _DOC_COLS if c in df]
+    starts = list(range(0, len(df), chunk))
+    if workers <= 1 or len(starts) <= 1:
+        res = [_hash_chunk(df[cols].iloc[s:s + chunk], views) for s in starts]
+    else:
+        res = [None] * len(starts)
+        with ProcessPoolExecutor(workers) as ex:
+            pending = {}
+            for k, s in enumerate(starts):
+                if len(pending) >= workers * 2:  # bounded queue keeps memory flat
+                    done, _ = wait(pending, return_when=FIRST_COMPLETED)
+                    for f in done:
+                        res[pending.pop(f)] = f.result()
+                pending[ex.submit(_hash_chunk, df[cols].iloc[s:s + chunk], views)] = k
+            for f in pending:
+                res[pending[f]] = f.result()
+    X = {v: sp.vstack([r[0][v] for r in res]).tocsr() for v in views}
+    return X, np.concatenate([r[1] for r in res])
 
 
 DOCS = {"name": name_docs, "addr": addr_docs, "name_addr": name_addr_docs}
@@ -117,11 +223,15 @@ class CountryIndex:
         self.pool = pool.reset_index(drop=True)
         self.cfg, self.threads = bcfg, threads
         self.vecs, self.B = {}, {}
-        for view in sorted({r["view"] for r in bcfg["retrievers"]}):
+        views = sorted({r["view"] for r in bcfg["retrievers"]})
+        Xp, self.pool["region"] = hash_views(self.pool, views, threads)
+        Xo, _ = hash_views(s1_all, views, threads)
+        for view in views:
             max_df = max(r.get("max_df", 20000) for r in bcfg["retrievers"] if r["view"] == view)
             vec = HashedTfidf(max_df)
-            self.B[view] = vec.fit_transform_pool(DOCS[view](self.pool), DOCS[view](s1_all))
+            self.B[view] = vec.fit_weight_pool(Xp[view], Xo[view])
             self.vecs[view] = vec
+        del Xp, Xo
         # name-token IDF for features (own counts, so common tokens keep a LOW idf)
         df = Counter()
         for s in (self.pool.name_core, s1_all.name_core):
@@ -141,7 +251,8 @@ class CountryIndex:
     def query(self, q: pd.DataFrame):
         """Return (union, cands) with qi = row in q, pj = row in self.pool."""
         q = q.reset_index(drop=True)
-        A = {v: self.vecs[v].transform(DOCS[v](q)).tocsr() for v in self.vecs}
+        X, _ = hash_views(q, list(self.vecs), self.threads)
+        A = {v: self.vecs[v].weight(X[v]) for v in self.vecs}
         parts = []
         for r in self.cfg["retrievers"]:
             C = sp_matmul_topn(A[r["view"]], self.B[r["view"]], top_n=r["k"],

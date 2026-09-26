@@ -1,0 +1,22 @@
+inherit: ../base.yaml
+exp_id: e004
+parent: e001
+note: "retrieval v3 (bigram/region/DBA/joined tokens, k40) + region-complete sample + reverse & nospace features + bigger model"
+sample: {n_s1: 150000, seed: 42, mode: region}
+blocking:
+  retrievers:
+    - {name: name, view: name, k: 40, min_sim: 0.05, max_df: 20000}
+    - {name: addr, view: addr, k: 40, min_sim: 0.05, max_df: 20000}
+    - {name: name_addr, view: name_addr, k: 40, min_sim: 0.05, max_df: 20000}
+  prune: {score: mean, max_k: 15, min_score: 0.0}
+model:
+  params: {n_estimators: 2000, learning_rate: 0.08, num_leaves: 127, min_child_samples: 100, max_bin: 127,
+           feature_fraction: 0.8, bagging_fraction: 0.7, bagging_freq: 1, reg_lambda: 1.0, n_jobs: 8}
+  early_stopping: 50
+  cv: {folds: 3}
+decision:
+  grid:
+    t_first: [0.05, 0.85, 0.05]
+    t_other: [0.10, 0.90, 0.10]
+    t_extra: [0.10, 0.90, 0.05]
+loco: false

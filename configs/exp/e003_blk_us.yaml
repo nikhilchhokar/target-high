@@ -1,0 +1,12 @@
+inherit: ../base.yaml
+exp_id: e003_blk_us
+parent: e001
+note: "blocking test (US only): bigram + region-tagged tokens, k 40, mean prune"
+sample: {n_s1: 150000, seed: 42}
+blocking:
+  only_countries: [us]
+  retrievers:
+    - {name: name, view: name, k: 40, min_sim: 0.05, max_df: 20000}
+    - {name: addr, view: addr, k: 40, min_sim: 0.05, max_df: 20000}
+    - {name: name_addr, view: name_addr, k: 40, min_sim: 0.05, max_df: 20000}
+  prune: {score: mean, max_k: 15, min_score: 0.0}

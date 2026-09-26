@@ -131,22 +131,30 @@ def run_blocking_only(cfg: dict) -> dict:
     sample = set(s1_all.entity_id.sample(n=min(n, len(s1_all)), random_state=cfg["sample"].get("seed", 42))
                  if n else s1_all.entity_id)
     unions, n_pool = [], 0
+    only = cfg["blocking"].get("only_countries")
     for bc in sorted(s1_all.bc.unique()):
+        if only and bc not in only:
+            continue
         pool = prep.load(cfg, "train", [2, 3], pipeline.Q_COLS, bc=bc)
         n_pool += len(pool)
         s1c = s1_all[s1_all.bc == bc]
         q = s1c[s1c.entity_id.isin(sample)].reset_index(drop=True)
+        t_i = time.time()
         idx = retrieve.CountryIndex(pool, s1c, cfg["blocking"], cfg.get("threads", 7))
+        print(f"[index] {bc}: pool {len(pool)} ({time.time() - t_i:.0f}s), nnz per view "
+              + str({v: int(idx.B[v].nnz) for v in idx.B}), flush=True)
         for s in range(0, len(q), cfg["blocking"].get("query_chunk", 200_000)):
             qq = q.iloc[s:s + cfg["blocking"].get("query_chunk", 200_000)].reset_index(drop=True)
+            t_q = time.time()
             u, _ = idx.query(qq)
+            print(f"   {bc} query {len(qq)}: union {len(u)} ({time.time() - t_q:.0f}s)", flush=True)
             u = u.assign(s1=qq.entity_id.values[u.qi.values], cand=idx.pool.entity_id.values[u.pj.values])
             unions.append(u.drop(columns=["qi", "pj"]))
         del idx, pool
     union = pd.concat(unions, ignore_index=True)
     prune = cfg["blocking"].get("prune", {})
     keep = (union.prune_rank <= prune.get("max_k", 15)) & (union.prune_score >= prune.get("min_score", 0.0))
-    s1 = s1_all[s1_all.entity_id.isin(sample)]
+    s1 = s1_all[s1_all.entity_id.isin(sample) & (s1_all.bc.isin(only) if only else True)]
     truth = io.load_ground_truth(Path(cfg["paths"]["data_dir"]) / "train" / "train_ground_truth.tsv",
                                  s1.entity_id.tolist())
     cand_map = union[keep].groupby("s1").cand.apply(list).to_dict()

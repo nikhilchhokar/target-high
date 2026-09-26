@@ -20,7 +20,7 @@ from . import prep, retrieve, featurize
 
 SRC_DIR = Path(__file__).parent
 STAGE_FILES = ["retrieve.py", "featurize.py", "pipeline.py"]
-Q_COLS = ["entity_id", "bc", "src"] + featurize.VIEW_COLS
+Q_COLS = ["entity_id", "bc", "src", "business_address"] + featurize.VIEW_COLS
 
 
 def load_config(path) -> dict:
@@ -68,17 +68,26 @@ def _country_runs(cfg, split, s1_all, q_filter=None):
             continue
         idx = retrieve.CountryIndex(pool, s1c, bcfg, threads)
         print(f"[index] {split}/{bc}: pool {len(pool)}, S1 {len(s1c)}, queries {len(q)} ({time.time() - t0:.0f}s)")
-        q = q.reset_index(drop=True)
-        for s in range(0, len(q), qchunk):
+        # chunk by region so competing S1 (same region) are scored together -> reverse features
+        q = q.assign(region=retrieve.region_of(q)).sort_values("region", kind="stable").reset_index(drop=True)
+        bounds, start = [], 0
+        reg_end = q.groupby("region", sort=False).size().cumsum().values
+        for e in reg_end:
+            if e - start >= qchunk:
+                bounds.append((start, e))
+                start = e
+        if start < len(q):
+            bounds.append((start, len(q)))
+        for s, e in bounds:
             t1 = time.time()
-            qq = q.iloc[s:s + qchunk].reset_index(drop=True)
+            qq = q.iloc[s:e].reset_index(drop=True)
             union, cands = idx.query(qq)
             f = featurize.compute(cands, qq, idx, workers)
             ids_q, ids_p = qq.entity_id.values, idx.pool.entity_id.values
             f.insert(0, "s1", ids_q[f.qi.values])
             f.insert(1, "cand", ids_p[f.pj.values])
             union = union.assign(s1=ids_q[union.qi.values], cand=ids_p[union.pj.values])
-            print(f"   {bc} queries {s}-{s + len(qq)}: union {len(union)}, cands {len(f)} "
+            print(f"   {bc} queries {s}-{e}: union {len(union)}, cands {len(f)} "
                   f"({time.time() - t1:.0f}s)")
             yield bc, qq, union, f.drop(columns=["qi", "pj"])
         del idx, pool
@@ -90,10 +99,30 @@ def _pruner_sig(cfg):
 
 
 def train_sample_ids(cfg: dict, s1_all: pd.DataFrame) -> set:
-    n = cfg.get("sample", {}).get("n_s1")
-    ids = (s1_all.entity_id.sample(n=min(n, len(s1_all)), random_state=cfg["sample"].get("seed", 42))
-           if n else s1_all.entity_id)
-    return set(ids)
+    """Training S1 sample. mode 'region' takes WHOLE regions (US/Indian states), so every sampled
+    entity's local competitors are sampled too - as at test time, where all S1 are scored."""
+    scfg = cfg.get("sample", {})
+    n = scfg.get("n_s1")
+    if not n:
+        return set(s1_all.entity_id)
+    if scfg.get("mode", "random") != "region":
+        return set(s1_all.entity_id.sample(n=min(n, len(s1_all)), random_state=scfg.get("seed", 42)))
+    reg = retrieve.region_of(s1_all).values
+    key = pd.Series(s1_all.bc.values + "|" + reg)
+    known = reg != ""
+    sizes = key[known].value_counts()
+    order = sizes.sample(frac=1.0, random_state=scfg.get("seed", 42))
+    frac_target = n / len(s1_all)
+    chosen, total = [], 0
+    for k, c in order.items():
+        if total >= n * known.mean():
+            break
+        chosen.append(k)
+        total += c
+    take = key.isin(chosen).values & known
+    rng = np.random.default_rng(scfg.get("seed", 42))
+    take |= (~known) & (rng.random(len(s1_all)) < frac_target)  # no region: random share
+    return set(s1_all.entity_id.values[take])
 
 
 def build_train(cfg: dict) -> dict:

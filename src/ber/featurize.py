@@ -67,6 +67,12 @@ def features_chunk(P: pd.DataFrame, idf: dict) -> pd.DataFrame:
     F["n_tset"] = [fuzz.token_set_ratio(a, b) for a, b in zip(na, nb)]
     F["n_jw"] = [JaroWinkler.similarity(a, b) for a, b in zip(na, nb)]
     F["n_lev"] = [Levenshtein.normalized_similarity(a, b) for a, b in zip(na, nb)]
+    # names written without spaces: '@emmylove', 'maguiresprairiecafe.com'
+    ja = [a.replace(" ", "") for a in na]
+    jb = [b.replace(" ", "").replace("com", "") for b in nb]
+    F["n_nospace_ratio"] = [fuzz.ratio(a, b) for a, b in zip(ja, jb)]
+    F["n_nospace_partial"] = [fuzz.partial_ratio(a, b) if min(len(a), len(b)) >= 5 else 0
+                              for a, b in zip(ja, jb)]
     sa, sb = P.a_name_skel.tolist(), P.b_name_skel.tolist()
     F["n_skel_ratio"] = [fuzz.ratio(a, b) for a, b in zip(sa, sb)]
     F["n_skel_tset"] = [fuzz.token_set_ratio(a, b) for a, b in zip(sa, sb)]
@@ -148,4 +154,11 @@ def add_context(df: pd.DataFrame) -> pd.DataFrame:
     df["ctx_n_cands"] = g.qi.transform("size").astype(np.float32)
     df["ctx_n_hi_name"] = (df.n_tset >= 90).groupby(df.qi).transform("sum").astype(np.float32)
     df["ctx_src_count"] = df.groupby(["qi", "cand_src"]).qi.transform("size").astype(np.float32)
+    # reverse competition: how this S1 ranks among ALL S1 that retrieved the same candidate
+    r = df.groupby("pj")
+    for col in ["prune_score", "sim_name_addr", "n_tset", "a_tset"]:
+        if col in df:
+            df[f"rev_rank_{col}"] = r[col].rank(ascending=False, method="min").astype(np.float32)
+            df[f"rev_gap_{col}"] = (r[col].transform("max") - df[col]).astype(np.float32)
+    df["rev_n_s1"] = r.pj.transform("size").astype(np.float32)
     return df
