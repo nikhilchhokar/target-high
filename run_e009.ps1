@@ -6,6 +6,8 @@ $env:PYTHONIOENCODING = "utf-8"
 $log = "$wd\e009_chain.log"
 "[chain] waiting for PID $WaitPid $(Get-Date -Format HH:mm)" | Out-File $log -Encoding utf8
 while (Get-Process -Id $WaitPid -ErrorAction SilentlyContinue) { Start-Sleep -Seconds 30 }
+"[chain] loco start $(Get-Date -Format HH:mm)" | Out-File $log -Append -Encoding utf8
+& "$wd\.venv\Scripts\python.exe" -u -m ber.loco configs/exp/e008_india.yaml *>> "$wd\loco.log"
 "[chain] experiment start $(Get-Date -Format HH:mm)" | Out-File $log -Append -Encoding utf8
 & "$wd\.venv\Scripts\python.exe" -u -m ber.run_experiment configs/exp/e009_legal.yaml *>> "$wd\e009.log"
 "[chain] experiment exit $LASTEXITCODE $(Get-Date -Format HH:mm)" | Out-File $log -Append -Encoding utf8
