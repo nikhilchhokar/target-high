@@ -91,6 +91,25 @@ def _rowwise_dot(A, B, i, j, chunk=500_000):
     return out
 
 
+def prune_features(union: pd.DataFrame, views, retr, cand_src: np.ndarray) -> pd.DataFrame:
+    """Cheap per-pair features for the learned pruner (no string work, fully vectorised)."""
+    F = pd.DataFrame(index=union.index)
+    g = union.groupby("qi")
+    for v in views:
+        col = union[f"sim_{v}"]
+        mx = g[f"sim_{v}"].transform("max")
+        F[f"sim_{v}"] = col
+        F[f"gap_{v}"] = mx - col
+        F[f"qmax_{v}"] = mx
+        F[f"qrank_{v}"] = g[f"sim_{v}"].rank(ascending=False, method="min")
+    for r in retr:
+        F[f"rank_{r['name']}"] = union[f"rank_{r['name']}"]
+    F["n_retr"] = union.n_retr
+    F["q_union"] = g.qi.transform("size")
+    F["cand_src"] = cand_src
+    return F.astype(np.float32)
+
+
 class CountryIndex:
     """Fitted vectorizers + pool matrices for one country; query S1 records in chunks."""
 
@@ -110,6 +129,11 @@ class CountryIndex:
                 df.update(set(n.split()))
         N = len(self.pool) + len(s1_all)
         self.idf = {t: math.log((N + 1) / (c + 1)) + 1 for t, c in df.items()}
+        model_path = bcfg.get("prune", {}).get("model")
+        self.pruner = None
+        if bcfg.get("prune", {}).get("score") == "model" and model_path:
+            import lightgbm as lgb
+            self.pruner = lgb.Booster(model_file=str(model_path))
         key_s1 = s1_all.name_core.value_counts()
         key_pool = self.pool.name_core.value_counts()
         self.chain_s1, self.chain_pool = key_s1, key_pool
@@ -140,8 +164,13 @@ class CountryIndex:
                               for r in self.cfg["retrievers"])
         sims = union[[f"sim_{v}" for v in self.vecs]]
         prune = self.cfg.get("prune", {})
-        union["prune_score"] = (sims.mean(axis=1) if prune.get("score", "mean") == "mean"
-                                else sims.max(axis=1)).astype(np.float32)
+        if self.pruner is not None:  # learned ranking of the union (see train_pruner.py)
+            F = prune_features(union, list(self.vecs), self.cfg["retrievers"],
+                               self.pool.src.values[union.pj.values])
+            union["prune_score"] = self.pruner.predict(F[self.pruner.feature_name()].to_numpy()).astype(np.float32)
+        else:
+            union["prune_score"] = (sims.mean(axis=1) if prune.get("score", "mean") == "mean"
+                                    else sims.max(axis=1)).astype(np.float32)
         union = union.sort_values(["qi", "prune_score"], ascending=[True, False], kind="stable")
         union["prune_rank"] = (union.groupby("qi").cumcount() + 1).astype(np.int16)
         keep = (union.prune_rank <= prune.get("max_k", 15)) & (union.prune_score >= prune.get("min_score", 0.0))

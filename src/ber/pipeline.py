@@ -84,9 +84,21 @@ def _country_runs(cfg, split, s1_all, q_filter=None):
         del idx, pool
 
 
+def _pruner_sig(cfg):
+    p = cfg["blocking"].get("prune", {}).get("model")
+    return hashlib.sha1(Path(p).read_bytes()).hexdigest()[:10] if p and Path(p).exists() else None
+
+
+def train_sample_ids(cfg: dict, s1_all: pd.DataFrame) -> set:
+    n = cfg.get("sample", {}).get("n_s1")
+    ids = (s1_all.entity_id.sample(n=min(n, len(s1_all)), random_state=cfg["sample"].get("seed", 42))
+           if n else s1_all.entity_id)
+    return set(ids)
+
+
 def build_train(cfg: dict) -> dict:
     """Features for a sample of train S1 entities (cached)."""
-    key = stable_hash({"inputs": _input_sig(cfg, "train"), "norm": prep.code_hash(),
+    key = stable_hash({"inputs": _input_sig(cfg, "train"), "norm": prep.code_hash(), "pruner": _pruner_sig(cfg),
                        "code": _code_hash(), "blocking": cfg["blocking"],
                        "features": cfg.get("features"), "sample": cfg.get("sample")})
     cdir = Path(cfg["paths"].get("cache_dir", "cache")) / f"train_{key}"
@@ -100,10 +112,7 @@ def build_train(cfg: dict) -> dict:
     prep.prep_split(cfg, "train")
     t_prep = time.time() - t0
     s1_all = prep.load(cfg, "train", [1], Q_COLS)
-    n = cfg.get("sample", {}).get("n_s1")
-    sample = (s1_all.entity_id.sample(n=min(n, len(s1_all)), random_state=cfg["sample"].get("seed", 42))
-              if n else s1_all.entity_id)
-    sample_set = set(sample)
+    sample_set = train_sample_ids(cfg, s1_all)
     feats, unions, n_pool = [], [], 0
     for bc, qq, union, f in _country_runs(cfg, "train", s1_all, sample_set):
         if f is not None:
