@@ -2,10 +2,8 @@
 data/
 data_synth/
 cache*/
-results*/*
-!results/leaderboard.csv
-submissions*/*
-!submissions/registry.csv
+results*/
+submissions*/
 output/
 reports/
 __pycache__/
