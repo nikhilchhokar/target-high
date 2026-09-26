@@ -1,7 +1,7 @@
 inherit: ../base.yaml
 exp_id: e004
 parent: e001
-note: "retrieval v3 (bigram/region/DBA/joined tokens, k40) + region-complete sample + reverse & nospace features + bigger model"
+note: "retrieval v3 + country-balanced region sample + reverse, no-space and copy-to-copy (sibling) features + bigger model"
 sample: {n_s1: 150000, seed: 42, mode: region}
 blocking:
   retrievers:

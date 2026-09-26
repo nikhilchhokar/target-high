@@ -45,6 +45,21 @@ def _num_near(a: str, b: str) -> int:
     return int(any(_drop_one(x, y) or _drop_one(y, x) for x in sa for y in sb))
 
 
+def _num_diffs(a: str, b: str):
+    """House-number arithmetic. Decoy records shift the real number by a small POSITIVE offset
+    (+1..+21); true copies keep it, drop a digit (2777->277) or zero-pad it.
+    Returns (min |diff|, signed diff of the closest NON-equal pair, #candidate numbers not in S1)."""
+    sa = [int(x) for x in a.split() if x.isdigit()]
+    sb = [int(x) for x in b.split() if x.isdigit()]
+    if not sa or not sb:
+        return (np.nan, np.nan, np.nan)
+    best_abs = min(abs(y - x) for x in sa for y in sb)
+    ne = [(abs(y - x), y - x) for x in sa for y in sb if y != x]
+    signed = min(ne)[1] if ne else 0
+    unmatched = sum(1 for y in sb if y not in set(sa))
+    return (best_abs, signed, unmatched)
+
+
 def _tok(na, nb, idf, max_idf):
     ta, tb = set(na.split()), set(nb.split())
     w = lambda t: idf.get(t, max_idf)
@@ -105,6 +120,14 @@ def features_chunk(P: pd.DataFrame, idf: dict) -> pd.DataFrame:
     F["num_state"] = [_set_state(a, b) for a, b in zip(P.a_house_nums, P.b_house_nums)]
     F["num_jacc"] = [_jacc(set(a.split()), set(b.split())) for a, b in zip(P.a_house_nums, P.b_house_nums)]
     F["num_near"] = [_num_near(a, b) for a, b in zip(P.a_house_nums, P.b_house_nums)]
+    nd = np.array([_num_diffs(a, b) for a, b in zip(P.a_house_nums, P.b_house_nums)], np.float64).reshape(-1, 3)
+    F["num_min_absdiff"] = np.log1p(nd[:, 0])
+    F["num_signed_diff"] = np.clip(nd[:, 1], -1e6, 1e6)
+    F["num_unmatched_b"] = nd[:, 2]
+    ua, ub = P.a_units.tolist(), P.b_units.tolist()
+    ud = np.array([_num_diffs(a, b) for a, b in zip(ua, ub)], np.float64).reshape(-1, 3)
+    F["unit_signed_diff"] = np.clip(ud[:, 1], -1e6, 1e6)
+    F["b_pmb_box"] = [float(" pmb " in f" {x} " or " box " in f" {x} ") for x in P.b_addr_core]
     F["unit_state"] = [_set_state(a, b) for a, b in zip(P.a_units, P.b_units)]
     F["landmark_both"] = [float(bool(a) and bool(b)) for a, b in zip(P.a_landmark, P.b_landmark)]
     F["landmark_tset"] = [fuzz.token_set_ratio(a, b) if a and b else -1 for a, b in zip(P.a_landmark, P.b_landmark)]
@@ -118,6 +141,31 @@ def _pairs(cands, q, pool):
     A = q[VIEW_COLS].iloc[cands.qi.values].reset_index(drop=True).add_prefix("a_")
     B = pool[VIEW_COLS].iloc[cands.pj.values].reset_index(drop=True).add_prefix("b_")
     return pd.concat([A, B], axis=1)
+
+
+def sibling_features(base: pd.DataFrame, index, top: int = 2) -> pd.DataFrame:
+    """Copy-to-copy links: similarity of each candidate to the S1 entity's top-`top` candidates.
+
+    Copies of one business resemble EACH OTHER even when one copy drifted from the S1 record
+    (random/website name, empty address), so 'looks like the best candidate' is strong evidence.
+    """
+    from .retrieve import _rowwise_dot
+    out = {}
+    qi, pj = base.qi.values, base.pj.values
+    support = np.zeros(len(base), np.float32)
+    for r in range(1, top + 1):
+        tops = base[base.prune_rank == r].set_index("qi")
+        partner = pd.Series(qi).map(tops.pj).values
+        partner_sim = pd.Series(qi).map(tops.sim_name_addr).fillna(0).values.astype(np.float32)
+        valid = ~np.isnan(partner) & (partner != pj)
+        for v in ("name_addr", "addr", "name"):
+            col = np.full(len(base), np.nan, np.float32)
+            if valid.any() and v in index.B:
+                col[valid] = _rowwise_dot(index.B[v], index.B[v], pj[valid], partner[valid].astype(np.int64))
+            out[f"sib{r}_{v}"] = col
+        support = np.maximum(support, np.nan_to_num(out[f"sib{r}_name_addr"]) * partner_sim)
+    out["sib_support"] = support
+    return pd.DataFrame(out, index=base.index)
 
 
 def compute(cands: pd.DataFrame, q: pd.DataFrame, index, workers: int = 7, chunk: int = 50_000) -> pd.DataFrame:
@@ -141,6 +189,7 @@ def compute(cands: pd.DataFrame, q: pd.DataFrame, index, workers: int = 7, chunk
     df["cand_src"] = pool.src.values[base.pj.values].astype(np.int8)
     df["chain_s1"] = P.a_name_core.map(index.chain_s1).fillna(0).values.astype(np.float32)
     df["chain_pool"] = P.a_name_core.map(index.chain_pool).fillna(0).values.astype(np.float32)
+    df = pd.concat([df, sibling_features(base, index)], axis=1)
     return add_context(df)
 
 

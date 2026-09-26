@@ -108,19 +108,27 @@ def train_sample_ids(cfg: dict, s1_all: pd.DataFrame) -> set:
     if scfg.get("mode", "random") != "region":
         return set(s1_all.entity_id.sample(n=min(n, len(s1_all)), random_state=scfg.get("seed", 42)))
     reg = retrieve.region_of(s1_all).values
-    key = pd.Series(s1_all.bc.values + "|" + reg)
+    bc = s1_all.bc.values
     known = reg != ""
-    sizes = key[known].value_counts()
-    order = sizes.sample(frac=1.0, random_state=scfg.get("seed", 42))
     frac_target = n / len(s1_all)
-    chosen, total = [], 0
-    for k, c in order.items():
-        if total >= n * known.mean():
-            break
-        chosen.append(k)
-        total += c
-    take = key.isin(chosen).values & known
+    take = np.zeros(len(s1_all), bool)
     rng = np.random.default_rng(scfg.get("seed", 42))
+    for c in np.unique(bc):  # per country, so every country is represented in proportion
+        m = (bc == c) & known
+        sizes = pd.Series(reg[m]).value_counts()
+        target = frac_target * m.sum()
+        order = sizes.sample(frac=1.0, random_state=scfg.get("seed", 42))
+        # prefer regions no bigger than ~2x the target so a single giant state cannot dominate
+        order = pd.concat([order[order <= max(target / 2, 1)], order[order > max(target / 2, 1)]])
+        chosen, total = [], 0
+        for k, cnt in order.items():
+            if total >= target:
+                break
+            if total + cnt > 1.5 * target and total > 0.5 * target:
+                continue
+            chosen.append(k)
+            total += cnt
+        take |= m & np.isin(reg, chosen)
     take |= (~known) & (rng.random(len(s1_all)) < frac_target)  # no region: random share
     return set(s1_all.entity_id.values[take])
 
