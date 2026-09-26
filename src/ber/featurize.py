@@ -3,6 +3,7 @@
 a_* columns = the S1 record, b_* = the candidate. Every feature is country-agnostic
 (France is unseen in training). Fuzzy string features use rapidfuzz (MIT).
 """
+import zlib
 from concurrent.futures import ProcessPoolExecutor
 
 import numpy as np
@@ -114,6 +115,11 @@ def features_chunk(P: pd.DataFrame, idf: dict) -> pd.DataFrame:
     cb = [_canon_legal(x) for x in P.b_legal]
     F["legal_canon_state"] = [_set_state(a, b) for a, b in zip(ca, cb)]
     F["n_full_tsort"] = [fuzz.token_sort_ratio(f"{a} {x}", f"{b} {y}") for a, b, x, y in zip(na, nb, ca, cb)]
+    # raw identifiers for stage-2 cluster consistency (a copy agrees with the other copies)
+    F["b_num1"] = [float(min(int(t) for t in x.split())) if x.split() else np.nan for x in P.b_house_nums]
+    F["a_num1"] = [float(min(int(t) for t in x.split())) if x.split() else np.nan for x in P.a_house_nums]
+    F["b_legal_code"] = [float(zlib.crc32(x.encode()) % 100003) if x else np.nan for x in cb]  # stable across processes
+    F["a_legal_code"] = [float(zlib.crc32(x.encode()) % 100003) if x else np.nan for x in ca]
     F["n_dba_best"] = [max(fuzz.token_set_ratio(a, db) if db else 0, fuzz.token_set_ratio(da, b) if da else 0)
                        for a, b, da, db in zip(na, nb, P.a_dba_core, P.b_dba_core)]
     F["name_num_state"] = [_set_state(a, b) for a, b in zip(P.a_name_nums, P.b_name_nums)]

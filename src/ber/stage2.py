@@ -8,7 +8,8 @@ import pandas as pd
 # raw pair features carried into stage 2 alongside the group features
 CARRY = ["sim_name_addr", "sim_name", "sim_addr", "n_tset", "a_tset", "num_signed_diff",
          "num_state", "a_missing", "chain_s1", "sib1_name_addr", "sib1_addr", "sib1_name",
-         "sib2_name_addr", "cand_src", "prune_rank", "n_nospace_partial"]
+         "sib2_name_addr", "cand_src", "prune_rank", "n_nospace_partial", "legal_canon_state",
+         "n_full_tsort", "b_num1", "a_num1"]
 
 
 def features(df: pd.DataFrame, p1: np.ndarray) -> pd.DataFrame:
@@ -40,6 +41,25 @@ def features(df: pd.DataFrame, p1: np.ndarray) -> pd.DataFrame:
     # sibling support weighted by the top candidate's probability
     if "sib1_name_addr" in df:
         F["sib_top_support"] = df.sib1_name_addr.fillna(0).values * mx.values
+    # cluster consistency: does this candidate agree with the consensus of the S1's strong candidates?
+    # (decoys copy a real record but shift the house number / change the legal form)
+    strong = p.values >= 0.9
+    for col, name in (("b_num1", "num"), ("b_legal_code", "legal")):
+        if col not in df:
+            continue
+        v = df[col].values
+        sel = strong & ~np.isnan(v)
+        cons = (pd.DataFrame({"s1": df.s1.values[sel], "v": v[sel]})
+                .groupby(["s1", "v"]).size().rename("n").reset_index()
+                .sort_values(["s1", "n"], ascending=[True, False]).drop_duplicates("s1").set_index("s1"))
+        mode = pd.Series(df.s1.values).map(cons.v).values.astype(np.float64)
+        n_mode = pd.Series(df.s1.values).map(cons.n).fillna(0).values
+        F[f"cons_{name}_eq"] = np.where(np.isnan(v) | np.isnan(mode), -1, (v == mode).astype(float))
+        F[f"cons_{name}_n"] = n_mode
+        if name == "num":
+            F["cons_num_diff"] = np.clip(v - mode, -1e6, 1e6)
+            a = df["a_num1"].values if "a_num1" in df else np.full(len(df), np.nan)
+            F["cons_num_vs_s1"] = np.where(np.isnan(a) | np.isnan(mode), -1, (a == mode).astype(float))
     for c in CARRY:
         if c in df:
             F[f"x_{c}"] = df[c].values

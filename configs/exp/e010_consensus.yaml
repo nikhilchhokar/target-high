@@ -1,0 +1,4 @@
+inherit: e009_legal.yaml
+exp_id: e010
+parent: e008
+note: "e008 + canonical legal-form features + stage-2 cluster-consistency (consensus house number / legal form)"
