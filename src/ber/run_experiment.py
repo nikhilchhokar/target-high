@@ -15,7 +15,7 @@ import numpy as np
 import pandas as pd
 import yaml
 
-from . import io, pipeline, model, decide, metrics, errors
+from . import io, pipeline, model, decide, metrics, errors, stage2
 
 
 def git_info():
@@ -51,7 +51,14 @@ def run(cfg: dict, write: bool = True) -> dict:
     y = np.fromiter((c in truth[s] for s, c in zip(feats.s1, feats.cand)), bool, len(feats)).astype(int)
     fcols = model.feature_cols(feats, cfg["model"].get("drop_features", []))
     oof, iters, imp = model.train_oof(feats[fcols], y, feats.s1.values, cfg["model"])
-    feats = feats.assign(p=oof, y=y)
+    p1, iters2, s2cols = oof, [], []
+    s2cfg = cfg["model"].get("stage2")
+    if s2cfg:  # stacked re-scoring from the stage-1 neighbourhood (same folds)
+        F2 = stage2.features(feats, p1)
+        s2cols = list(F2.columns)
+        oof, iters2, _ = model.train_oof(F2, y, feats.s1.values, {**cfg["model"], **s2cfg})
+        del F2
+    feats = feats.assign(p=oof, p1=p1, y=y)
     t_train = time.time() - t0
     rel = metrics.reliability(oof, y)
 
@@ -94,6 +101,7 @@ def run(cfg: dict, write: bool = True) -> dict:
         "raw_best": best["raw_best"], **bm, **bd, **loco,
         "ece": rel["ece"], "n_pairs": int(len(feats)), "pos_rate": float(y.mean()),
         "best_iter_median": int(np.median(iters)), "n_features": len(fcols),
+        "best_iter_median_s2": int(np.median(iters2)) if iters2 else None, "features_s2": s2cols,
         "n_s1_eval": len(s1), "runtime_train_s": t_train,
         **{f"runtime_{k}": v for k, v in built["timings"].items()},
         "runtime_total_s": time.time() - t_start,
@@ -105,7 +113,7 @@ def run(cfg: dict, write: bool = True) -> dict:
         (out / "config.yaml").write_text(yaml.safe_dump(cfg, sort_keys=False))
         (out / "metrics.json").write_text(json.dumps({**res, "features": fcols,
                                                       "reliability": rel["bins"]}, indent=2))
-        feats[["s1", "cand", "cand_src", "p", "y"]].to_parquet(out / "oof.parquet")
+        feats[["s1", "cand", "cand_src", "p", "p1", "y"]].to_parquet(out / "oof.parquet")
         ent.rename("f05").to_csv(out / "entity_scores.csv", index_label="s1")
         curve.to_csv(out / "threshold_curve.csv", index=False)
         imp.rename("gain_share").to_csv(out / "feature_importance.csv", index_label="feature")
@@ -118,7 +126,7 @@ def run(cfg: dict, write: bool = True) -> dict:
         pd.concat([pd.read_csv(lb), pd.DataFrame([row])] if lb.exists() else [pd.DataFrame([row])],
                   ignore_index=True).to_csv(lb, index=False)
         print(f"[saved] {out}")
-    return {**res, "fcols": fcols, "iters": iters}
+    return {**res, "fcols": fcols, "iters": iters, "iters2": iters2, "s2cols": s2cols}
 
 
 def run_blocking_only(cfg: dict) -> dict:

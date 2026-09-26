@@ -40,6 +40,38 @@ def select(d: pd.DataFrame, t_first: float, t_other: float, t_extra: float) -> n
         d.is_top.values | (d.is_other_best.values & (pa >= t_other)) | (pa >= t_extra))
 
 
+def select_expected_f(d: pd.DataFrame, alpha: float = 1.0, miss: float = 0.0,
+                      empty_bias: float = 1.0) -> np.ndarray:
+    """Per S1, choose the top-k set maximising the plug-in expected F0.5.
+
+    With calibrated pair probabilities p (sorted desc), F0.5 = 1.25*TP / (0.25*|T| + k), so
+        E[F | k] ~= 1.25 * sum_{i<=k} p_i / (0.25 * (alpha * sum_i p_i + miss) + k)
+    and predicting nothing scores 1 only if there is no match: E[F | 0] ~= prod_i (1 - p_i).
+    alpha/miss adjust the expected true-set size (e.g. for matches lost at blocking);
+    empty_bias scales the empty-set value. All three are tuned on out-of-fold predictions.
+    Assumes d is sorted by s1 then pa desc (as returned by prepare()).
+    """
+    pa = np.clip(d.pa.values.astype(np.float64), 0.0, 1.0)
+    codes, _ = pd.factorize(d.s1.values)  # contiguous groups in sorted order
+    starts = np.r_[0, np.flatnonzero(np.diff(codes)) + 1]
+    group_start = np.repeat(starts, np.diff(np.r_[starts, len(pa)]))
+    cs = np.cumsum(pa)
+    cs_group = cs - np.r_[0.0, cs][group_start]           # within-group cumulative sum
+    k = np.arange(len(pa)) - group_start + 1
+    total = np.add.reduceat(pa, starts)[codes]
+    val = 1.25 * cs_group / (0.25 * (alpha * total + miss) + k)
+    log_empty = np.add.reduceat(np.log1p(-np.minimum(pa, 1 - 1e-9)), starts)[codes]
+    empty_val = empty_bias * np.exp(log_empty)
+    best_val = pd.Series(val).groupby(codes).cummax().values  # running best up to k
+    group_best = pd.Series(val).groupby(codes).transform("max").values
+    # best k = first position where the running best reaches the group maximum
+    first_hit = (val == group_best)
+    kstar_pos = pd.Series(np.where(first_hit, k, np.inf)).groupby(codes).transform("min").values
+    keep = (k <= kstar_pos) & (group_best > empty_val) & (pa > 0)
+    del best_val
+    return keep
+
+
 def to_map(d: pd.DataFrame, mask: np.ndarray) -> dict:
     sel = d[mask]
     return sel.groupby("s1", sort=False).cand.apply(list).to_dict()

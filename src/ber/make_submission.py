@@ -18,7 +18,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from . import io, pipeline, prep, model, decide, run_experiment
+from . import io, pipeline, prep, model, decide, run_experiment, stage2
 
 
 def self_check(match_map, cand_map, s1_ids):
@@ -59,7 +59,9 @@ def main():
         m = json.loads(saved.read_text()) if saved.exists() else {}
         if m.get("cfg_hash") == pipeline.stable_hash(cfg):
             print(f"[reuse] thresholds and iterations from {saved}")
-            res = {**m, "fcols": m["features"], "iters": [m["best_iter_median"]]}
+            res = {**m, "fcols": m["features"], "iters": [m["best_iter_median"]],
+                   "iters2": [m["best_iter_median_s2"]] if m.get("best_iter_median_s2") else [],
+                   "s2cols": m.get("features_s2", [])}
         else:
             res = run_experiment.run(cfg, write=True)
         tr = pipeline.build_train(cfg)
@@ -69,12 +71,24 @@ def main():
         y = np.fromiter((c in truth[s] for s, c in zip(feats_tr.s1, feats_tr.cand)), bool, len(feats_tr)).astype(int)
         n_iter = int(np.median(res["iters"]) * cfg["model"].get("full_iter_mult", 1.1))
         models = model.train_full(feats_tr[res["fcols"]], y, cfg["model"], n_iter)
+        models2 = None
+        if cfg["model"].get("stage2") and res.get("iters2"):
+            # stage 2 is trained on OUT-OF-FOLD stage-1 probabilities (as in validation)
+            oof = pd.read_parquet(Path(paths.get("results_dir", "results")) / cfg["exp_id"] / "oof.parquet")
+            assert (oof.s1.values == feats_tr.s1.values).all()
+            F2 = stage2.features(feats_tr, oof.p1.values)
+            n2 = int(np.median(res["iters2"]) * cfg["model"].get("full_iter_mult", 1.1))
+            models2 = model.train_full(F2[res["s2cols"]], y, {**cfg["model"], **cfg["model"]["stage2"]}, n2)
+            del F2, oof
         del feats_tr, tr
         scored = []
         for bc, qq, f in pipeline.iter_test(cfg):
             if f is None or len(f) == 0:
                 continue
-            scored.append(f[["s1", "cand", "cand_src"]].assign(p=model.predict(models, f[res["fcols"]]).astype(np.float32)))
+            p = model.predict(models, f[res["fcols"]]).astype(np.float32)
+            if models2 is not None:
+                p = model.predict(models2, stage2.features(f, p)[res["s2cols"]]).astype(np.float32)
+            scored.append(f[["s1", "cand", "cand_src"]].assign(p=p))
         scored = pd.concat(scored, ignore_index=True)
         cache = Path(paths.get("cache_dir", "cache"))
         cache.mkdir(exist_ok=True)
