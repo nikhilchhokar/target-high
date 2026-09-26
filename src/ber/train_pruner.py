@@ -49,7 +49,9 @@ def main():
         idx = retrieve.CountryIndex(pool, s1c, bcfg, cfg.get("threads", 7))
         union, _ = idx.query(q)
         F = retrieve.prune_features(union, list(idx.vecs), bcfg["retrievers"],
-                                    idx.pool.src.values[union.pj.values])
+                                    idx.pool.src.values[union.pj.values],
+                                    q.name_indic.values[union.qi.values].astype(np.float32),
+                                    idx.pool.name_indic.values[union.pj.values].astype(np.float32))
         s1_ids, cand_ids = q.entity_id.values[union.qi.values], idx.pool.entity_id.values[union.pj.values]
         feats.append(F)
         ys.append(np.fromiter((c in truth[s] for s, c in zip(s1_ids, cand_ids)), bool, len(union)))

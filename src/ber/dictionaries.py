@@ -46,6 +46,12 @@ NAME_ABBR = {
     "us": {}, "in": {},
 }
 
+# applied only to names written in an Indic script: transliterated legal abbreviations
+# ('प्रा. लि.' = 'pra. li.' = Pvt. Ltd.)
+INDIC_NAME_ABBR = {"pra": "private", "li": "limited", "lim": "limited", "limitad": "limited",
+                   "praivet": "private", "prayivet": "private", "piraivet": "private",
+                   "elelpi": "llp", "elelapi": "llp", "kampani": "company", "kampni": "company"}
+
 NAME_STOPWORDS = {"the", "and", "of", "a", "an", "le", "la", "les", "l", "de", "du",
                   "des", "d", "et", "en", "au", "aux", "ms", "m/s"}
 

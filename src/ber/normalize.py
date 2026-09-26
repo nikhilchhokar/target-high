@@ -18,6 +18,8 @@ _FR_ELISION = re.compile(r"\b([ldjmnst])['’]")
 _APOS = re.compile(r"['’`]")
 _DIGITS = re.compile(r"\d+")
 _VOWELS = re.compile(r"[aeiouy]")
+_C_SOFT = re.compile(r"c(?=[eiy])")
+_C_HARD = re.compile(r"c(?!h)")
 _SKEL_MAP = [("x", "ks"), ("ph", "f"), ("sh", "s"), ("kh", "k"), ("gh", "g"), ("th", "t"),
              ("bh", "b"), ("dh", "d"), ("ck", "k"), ("q", "k"), ("w", "v"), ("z", "s"),
              ("b", "p"), ("d", "t"), ("g", "k")]
@@ -89,7 +91,9 @@ def _strip_legal(tokens):
 
 def skeleton(token: str) -> str:
     """Consonant skeleton for transliteration robustness (Laxmi~Lakshmi, Shree~Sri)."""
-    t = token
+    # English c: soft before e/i/y ('service' ~ Hindi 'sarvis'), hard otherwise ('care' ~ 'keyar')
+    t = _C_SOFT.sub("s", token)
+    t = _C_HARD.sub("k", t)
     for a, b in _SKEL_MAP:
         t = t.replace(a, b)
     if not t:
@@ -103,12 +107,15 @@ def skeleton(token: str) -> str:
 
 
 def normalize_name(raw: str, cc: str) -> dict:
+    indic = has_indic(str(raw))
     text = strip_accents(indic_to_latin(str(raw)).lower())
     parts = re.split(D.DBA_PATTERN, text, maxsplit=1)
     main, dba = parts[0], (parts[1] if len(parts) > 1 else "")
 
     def core_of(s):
         toks = _expand(basic_tokens(s, cc), D.NAME_ABBR, cc)
+        if indic:
+            toks = [D.INDIC_NAME_ABBR.get(t, t) for t in toks]
         stripped, legal = _strip_legal(toks)
         core = [t for t in stripped if t not in D.NAME_STOPWORDS] or stripped or toks
         return toks, core, legal

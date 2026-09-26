@@ -198,7 +198,8 @@ def _rowwise_dot(A, B, i, j, chunk=500_000):
     return out
 
 
-def prune_features(union: pd.DataFrame, views, retr, cand_src: np.ndarray) -> pd.DataFrame:
+def prune_features(union: pd.DataFrame, views, retr, cand_src: np.ndarray,
+                   q_indic: np.ndarray = None, c_indic: np.ndarray = None) -> pd.DataFrame:
     """Cheap per-pair features for the learned pruner (no string work, fully vectorised)."""
     F = pd.DataFrame(index=union.index)
     g = union.groupby("qi")
@@ -214,6 +215,9 @@ def prune_features(union: pd.DataFrame, views, retr, cand_src: np.ndarray) -> pd
     F["n_retr"] = union.n_retr
     F["q_union"] = g.qi.transform("size")
     F["cand_src"] = cand_src
+    if q_indic is not None:  # names in different scripts share few tokens: don't punish them
+        F["q_indic"] = q_indic
+        F["c_indic"] = c_indic
     return F.astype(np.float32)
 
 
@@ -289,7 +293,9 @@ class CountryIndex:
         prune = self.cfg.get("prune", {})
         if self.pruner is not None:  # learned ranking of the union (see train_pruner.py)
             F = prune_features(union, list(self.vecs), self.cfg["retrievers"],
-                               self.pool.src.values[union.pj.values])
+                               self.pool.src.values[union.pj.values],
+                               q.name_indic.values[union.qi.values].astype(np.float32),
+                               self.pool.name_indic.values[union.pj.values].astype(np.float32))
             union["prune_score"] = self.pruner.predict(F[self.pruner.feature_name()].to_numpy()).astype(np.float32)
         else:
             union["prune_score"] = (sims.mean(axis=1) if prune.get("score", "mean") == "mean"

@@ -47,6 +47,8 @@ def indic_to_latin(s: str) -> str:
     """Transliterate Indic characters; everything else passes through unchanged."""
     if not has_indic(s):
         return s
+    # zero-width (non-)joiners sit INSIDE words (e.g. Telugu 'infra'); they must not split words
+    s = s.replace(chr(0x200C), "").replace(chr(0x200D), "")
     out = []
     pending = False  # a consonant waiting for its inherent vowel
 

@@ -1,0 +1,6 @@
+inherit: e007_stacked.yaml
+exp_id: e008
+parent: e007
+note: "India fixes: zero-width joiners, Indic legal abbreviations, English c-sound skeleton, pruner script flags; + stacking"
+blocking:
+  prune: {score: model, model: C:/Users/chhav/ber_work/cache/pruner_e008.txt, max_k: 25, min_score: 0.0}
