@@ -4,6 +4,6 @@ note: "smoke test on synthetic data"
 workers: 2
 sample: {n_s1: null, seed: 42}
 blocking: {query_chunk: 1000}
-paths: {data_dir: data_synth, work_dir: work_synth, cache_dir: cache_synth, results_dir: results_synth, submissions_dir: submissions_synth, validator: ""}
+paths: {data_dir: data_synth, work_dir: work_synth, cache_dir: cache_synth, results_dir: results_synth, submissions_dir: submissions_synth, output_dir: output_synth, validator: ""}
 model:
   stage2: {params: {n_estimators: 1500, learning_rate: 0.05, num_leaves: 63, min_child_samples: 200, feature_fraction: 0.9, bagging_fraction: 0.8, bagging_freq: 1, n_jobs: 4}, early_stopping: 50}

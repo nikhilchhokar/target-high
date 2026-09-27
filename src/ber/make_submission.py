@@ -147,9 +147,9 @@ def main():
 
     # latest passing submission is mirrored to output/ (the zip layout)
     if status != "FAIL":
-        Path("output").mkdir(exist_ok=True)
+        Path(paths.get("output_dir", "output")).mkdir(parents=True, exist_ok=True)
         for f in ("matching_results.tsv", "candidate_pairs.tsv"):
-            shutil.copy(out / f, Path("output") / f)
+            shutil.copy(out / f, Path(paths.get("output_dir", "output")) / f)
 
     sizes = np.array([len(cand_map.get(s, ())) for s in s1_ids])
     n_pred = np.array([len(match_map.get(s, ())) for s in s1_ids])
