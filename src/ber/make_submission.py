@@ -8,6 +8,7 @@ models on all training pairs, build test candidates/features, predict, decide, w
 self-check, run the official validator if present, and register the submission.
 """
 import argparse
+import copy
 import json
 import shutil
 import subprocess
@@ -90,7 +91,12 @@ def main():
         ck = Path(paths.get("cache_dir", "cache")) / f"test_chunks_{cfg['exp_id']}_{pipeline.stable_hash(cfg)}"
         ck.mkdir(parents=True, exist_ok=True)
         skip = lambda bc, s, e: (ck / f"{bc}_{s}_{e}.parquet").exists()
-        for bc, key, f in pipeline.iter_test(cfg, skip=skip):
+        # smaller test chunks cap peak memory (features of one chunk are held at once); training
+        # features are unaffected because only this copy of the config changes
+        cfg_test = copy.deepcopy(cfg)
+        if cfg.get("test_query_chunk"):
+            cfg_test["blocking"]["query_chunk"] = cfg["test_query_chunk"]
+        for bc, key, f in pipeline.iter_test(cfg_test, skip=skip):
             path = ck / f"{key}.parquet"
             if f is None:
                 if path.exists():
