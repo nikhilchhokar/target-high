@@ -13,7 +13,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 CODE_ITEMS = ["src", "configs", "tools", "README.md", "requirements.txt", "pyproject.toml",
-              "run_e010.ps1", "run_after.ps1"]
+              "reproduce.sh", "run_after.ps1"]
 SKIP_PARTS = {"__pycache__", ".egg-info"}
 
 

@@ -95,6 +95,18 @@ resolution → thresholds tuned on out-of-fold macro F0.5 → output files.
 | + word pairs, region tags, DBA, joined names | 0.943 | 0.980 |
 | + learned pruner | 0.960 | 0.986 |
 | + deeper search, skeleton region tags, 25 candidates | 0.969 | 0.990 |
+| + second-hop retrieval from likely copies (≤5 extra per S1) | 0.975 | 0.991 |
+
+**Second-hop retrieval.** Copies of one business resemble *each other* even when one drifted far
+from the S1 record (random name at the copy's exact address, name-only record with the copy's
+spelling). For each S1 we take its likely copies (top-3 candidates with a high name+address
+similarity) and retrieve *their* nearest pool neighbours in all three views, adding up to five new
+candidates flagged `is_hop`.
+
+**France (test-only).** French copies alternate between the région ("Nouvelle-Aquitaine"), the
+département ("Gironde") or neither, which the training countries never show (US states normalise
+to one code). These phrases are removed from French addresses before retrieval and features. On
+the leaderboard this lifted the implied French score from ≈0.86 to ≈0.915.
 
 ---
 
@@ -118,7 +130,18 @@ resolution → thresholds tuned on out-of-fold macro F0.5 → output files.
 out-of-fold predictions grouped by S1. A **stage-2 LightGBM** re-scores each pair from the
 stage-1 probabilities of its neighbourhood (rank and gap within the S1, the strongest rival S1
 claiming the same candidate); its dominant feature is the margin between this business and the
-best rival.
+best rival. Stage 2 also carries **cluster-consistency** features: the consensus house number and
+canonical legal form among the S1's strong candidates, and whether each candidate agrees (decoys
+copy a real record but shift the number or change the legal form, so they disagree with the
+consensus even when the S1 record itself has no number); and **source-cardinality** features
+(strong S2 / S3 copies found so far, whether a candidate is the best of a still-empty source).
+These halved the false merges (pair precision 0.993 → 0.996).
+
+**Test-density weighting.** The test pool has ~1.1 more unmatched records per business than the
+training pool, so test businesses more often have several borderline candidates (India: 7.9% with
+2+ borderline candidates vs 3.5% in training). Training rows and the threshold search are weighted
+per S1 by P_test(bucket) / P_train(bucket) of that ambiguity bucket, so the model and thresholds
+target the test distribution.
 
 **Training sample:** whole regions (US and Indian states) sampled per country (~173k S1),
 retrieved against the *full* pool, so every sampled business's local competitors are present,
@@ -135,18 +158,31 @@ the tuned thresholds.
 
 ## 5. Results & Error Analysis
 
-- **F_0.5 Score (macro, out-of-fold on region-complete training sample):** 0.9716 (e007);
-  [update with e008]. Local validation tracked the leaderboard closely
-  (e001: 0.925 local, 0.915 leaderboard).
+- **F_0.5 Score (macro, out-of-fold on region-complete training sample):** 0.9784 (e011);
+  best leaderboard score 0.962 (e011).
 
 | Experiment | Main change | Local macro F0.5 | Leaderboard |
 | --- | --- | --- | --- |
 | e001 | baseline retrieval + LightGBM | 0.925 | 0.915 |
 | e004 | combination-token retrieval, region sample, reverse/sibling features | 0.958 | – |
-| e005 | learned pruner, decoy number features | 0.9675 | [fill] |
+| e005 | learned pruner, decoy number features | 0.9675 | 0.947 |
 | e006 | deeper search, skeleton region tags, 25 candidates | 0.9704 | – |
 | e007 | stage-2 stacking | 0.9716 | – |
-| e008 | India script fixes (joiners, Indic legal abbreviations, c-sound skeleton) | [fill] | [fill] |
+| e008 | India script fixes (joiners, Indic legal abbreviations, c-sound skeleton) | 0.9723 | 0.949 |
+| e010 | canonical legal forms + cluster-consistency stage 2 | 0.9774 | – |
+| e011 | second-hop retrieval, source-cardinality features, French région/département cleanup | 0.9784 | **0.962** |
+| e012 | test-density weighting | [fill] | [fill] |
+
+**Where the remaining error is (oracle analysis on e010).** Making every decision on retrieved
+candidates perfect would give 0.990; retrieving every true copy (with current decisions) 0.988.
+About a third of the decision error is name-only copies of chain names shared by several S1
+businesses; with the same legal form such a copy is a true match only ~11% of the time, so it is
+largely irreducible from the provided fields.
+
+**Local vs leaderboard gap.** Re-weighting validation to the test set's ambiguity profile
+explains part of the gap (India 0.963 → 0.955); the remainder is France (no labels). A
+leave-one-country-out check (train US, score India) measured the transfer loss and ruled out
+per-country rank normalisation (0.885 → 0.874) and self-training as remedies.
 
 - **Common false positives (wrong merges):** generated decoys — same name and street with a
   shifted house or unit number (`D.No.1-11-29/4` vs `/11`), especially when the S1 record has no
@@ -187,8 +223,9 @@ MIT/Apache-licensed models.
 | `src/ber/decide.py`, `metrics.py` | One-to-one resolution, thresholds, exact metric |
 | `src/ber/run_experiment.py`, `make_submission.py` | Training experiment; test outputs + validation |
 
-Reproduce: `python -m ber.train_pruner configs/exp/e008_india.yaml`, then
-`python -m ber.make_submission configs/exp/e008_india.yaml` (writes both files to `output/`).
+Reproduce: `bash reproduce.sh` (pruner → e011 experiment and test scores → test-density weights →
+e012 experiment and test scores; writes both files to `output/`). The steps are listed in
+`README.md`.
 
 ### B. Additional Results
 

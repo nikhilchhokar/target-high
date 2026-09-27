@@ -32,16 +32,26 @@ Set the paths at the top of `configs/base.yaml`:
 ## Reproduce the final submission
 
 ```bash
-python -m ber.train_pruner configs/exp/e008_india.yaml
-python -m ber.make_submission configs/exp/e008_india.yaml
+bash reproduce.sh
 ```
 
-The first command normalises all records (cached by code hash, ~30 min on 7 cores) and trains
-the candidate pruner on a separate S1 sample. The second runs the training experiment
-(out-of-fold predictions, stage-2 stacking, threshold search), fits the final models, scores
-every test S1 country by country, writes `output/matching_results.tsv` and
-`output/candidate_pairs.tsv`, self-checks both, runs the official validator and records the run
-in `submissions/registry.csv`. `run_e008.sh` chains all steps.
+which runs, in order:
+
+```bash
+python -m ber.train_pruner configs/exp/e008_india.yaml        # normalise all records + train the pruner
+python -m ber.run_experiment configs/exp/e011_hop.yaml         # OOF predictions, stage 2, thresholds
+python -m ber.make_submission configs/exp/e011_hop.yaml        # score test (e011 files)
+python tools/density_weights.py --config configs/exp/e011_hop.yaml --out <model.weight_file of e012>
+python -m ber.run_experiment configs/exp/e012_density.yaml     # retrain with test-density weights
+python -m ber.make_submission configs/exp/e012_density.yaml    # final files -> output/
+```
+
+Normalisation is cached by code hash (~30 min on 7 cores); the pruner is trained on a separate S1
+sample. `make_submission` fits the final models, scores every test S1 country by country
+(resumable: finished chunks are saved under `cache_dir`), writes `output/matching_results.tsv`
+and `output/candidate_pairs.tsv`, self-checks both, runs the official validator and records the
+run in `submissions/registry.csv`. If it is interrupted, re-running resumes; `python -m
+ber.finalize <cfg>` rebuilds the two files from the saved chunk scores alone.
 
 ## Commands
 
