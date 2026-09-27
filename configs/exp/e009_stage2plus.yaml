@@ -1,0 +1,4 @@
+inherit: e008_india.yaml
+exp_id: e009
+parent: e008
+note: "e008 + expanded stage-2 CARRY (50+ features: top stage-1 gain features + context) → better top-1 selection"

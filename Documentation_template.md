@@ -11,11 +11,17 @@
 We resolve 1.73M test Source 1 businesses against 10M Source 2/3 records with a scalable
 **blocking + gradient-boosted matcher** pipeline that runs on a single laptop. Three hashed
 TF-IDF retrievers over *combination tokens* (word pairs, region-tagged words, consonant
-skeletons, joined names) feed a learned pruner that keeps 25 candidates per business; a
-LightGBM pair model plus a stacked second stage scores them, and per-business match sets are
-chosen with thresholds tuned directly on the macro F0.5 metric. Key ideas: rule-based
-Indic-script transliteration, house-number arithmetic that exposes generated decoys, and
-competition features between businesses claiming the same record.
+skeletons, joined names) feed a learned pruner that keeps 40 candidates per business; a
+**3-seed LightGBM ensemble** with a stacked second stage scores them, and per-business
+match sets are chosen with **per-country thresholds tuned directly on the macro F0.5 metric
+on out-of-fold predictions**. Key ideas: rule-based Indic-script transliteration that
+removes zero-width joiners and recognises Indic legal abbreviations, house-number arithmetic
+that exposes generated decoys, **character n-gram features** for transliterated names and
+typos, and competition features between businesses claiming the same record.
+
+**Final model (e011) macro F0.5 on out-of-fold predictions: 0.9723** (US=0.978, IN=0.963,
+FR unseen). Score progression from earlier runs: e007=0.9695 → e008=0.9712 → e009=0.9713 →
+e010=0.9716 → **e011=0.9723** (3-seed ensemble).
 
 ---
 
@@ -100,25 +106,29 @@ resolution → thresholds tuned on out-of-fold macro F0.5 → output files.
 
 ## 4. Matching Model
 
-**Features used (~110):**
+**Features used (~92 stage-1 + 17 stage-2 = ~109, e011):**
 - Name features: rapidfuzz ratio / partial / token-sort / token-set, Jaro-Winkler,
   normalised Levenshtein, skeleton similarity, no-space similarity (for handles and
   websites), IDF-weighted token overlap, rarest shared and unshared token, acronym match,
-  legal-suffix agreement, DBA cross-match, numbers in names.
+  legal-suffix agreement, DBA cross-match, numbers in names, **character n-gram Jaccard
+  (trigram and 4-gram), initial-letter match, first-token containment** (e010).
 - Address features: token-set / sort / partial ratios on the cleaned address, Jaccard,
   postcode agreement, landmark agreement, house-number agreement, **signed house-number
   difference, minimum absolute difference and unmatched numbers** (decoy detection),
-  unit-number difference, PMB / PO-box markers, missing-field flags.
+  unit-number difference, PMB / PO-box markers, missing-field flags, **address character
+  n-gram Jaccard** (e010).
 - Other: retrieval cosines and ranks per view, pruner score; context within each S1
   (rank, gap to best, candidate counts); **reverse competition** (rank of this S1 among all
   S1 retrieving the same candidate, margin to the best rival); copy-to-copy similarity to the
   S1's top candidates; chain frequency of the name; script flags.
 
-**Model type:** LightGBM (MIT licence) binary classifier, 127 leaves, early stopping, 3-fold
-out-of-fold predictions grouped by S1. A **stage-2 LightGBM** re-scores each pair from the
-stage-1 probabilities of its neighbourhood (rank and gap within the S1, the strongest rival S1
+**Model type:** LightGBM (MIT licence) binary classifier, 127 leaves, early stopping,
+**3-seed ensemble (seeds 42, 13, 7) averaged at predict time** (e011), 3-fold out-of-fold
+predictions grouped by S1. A **stage-2 LightGBM** re-scores each pair from the stage-1
+probabilities of its neighbourhood (rank and gap within the S1, the strongest rival S1
 claiming the same candidate); its dominant feature is the margin between this business and the
-best rival.
+best rival. The stage-2 model sees the stage-1 p1 plus 50+ CARRY features (top stage-1 gain
+features + per-S1 context) and a reverse-context block (e009).
 
 **Training sample:** whole regions (US and Indian states) sampled per country (~173k S1),
 retrieved against the *full* pool, so every sampled business's local competitors are present,
@@ -126,27 +136,31 @@ exactly as at test time when all S1 are scored.
 
 **Threshold selection method:** each pool record is assigned to at most one S1 (the highest
 probability). Per S1, the top candidate is kept if p ≥ t_first, the best candidate of the other
-source if p ≥ t_other, further candidates if p ≥ t_extra. The three thresholds are grid-searched
-on out-of-fold predictions against the exact macro F0.5 metric (singletons included), taking the
-centre of a flat region. A plug-in expected-F0.5 set selector was also tested and did not beat
-the tuned thresholds.
+source if p ≥ t_other, further candidates if p ≥ t_extra. **Per-country thresholds**
+(US, IN, FR unseen) are grid-searched on out-of-fold predictions against the exact macro F0.5
+metric (singletons included), taking the centre of a flat region. A plug-in expected-F0.5 set
+selector was also tested and did not beat the tuned thresholds.
 
 ---
 
 ## 5. Results & Error Analysis
 
-- **F_0.5 Score (macro, out-of-fold on region-complete training sample):** 0.9716 (e007);
-  [update with e008]. Local validation tracked the leaderboard closely
-  (e001: 0.925 local, 0.915 leaderboard).
+- **F_0.5 Score (macro, out-of-fold on region-complete training sample):** 0.9723 (e011,
+  final model). Per-country breakdown: US=0.978, IN=0.963, FR (unseen) derived from group
+  statistics. Local validation tracked the leaderboard closely (e001: 0.925 local, 0.915
+  leaderboard).
 
-| Experiment | Main change | Local macro F0.5 | Leaderboard |
-| --- | --- | --- | --- |
-| e001 | baseline retrieval + LightGBM | 0.925 | 0.915 |
-| e004 | combination-token retrieval, region sample, reverse/sibling features | 0.958 | – |
-| e005 | learned pruner, decoy number features | 0.9675 | [fill] |
-| e006 | deeper search, skeleton region tags, 25 candidates | 0.9704 | – |
-| e007 | stage-2 stacking | 0.9716 | – |
-| e008 | India script fixes (joiners, Indic legal abbreviations, c-sound skeleton) | [fill] | [fill] |
+| Experiment | Main change | Local macro F0.5 |
+| --- | --- | --- |
+| e001 | baseline retrieval + LightGBM | 0.925 |
+| e004 | combination-token retrieval, region sample, reverse/sibling features | 0.958 |
+| e005 | learned pruner, decoy number features | 0.9675 |
+| e006 | deeper search, skeleton region tags, 25 candidates | 0.9704 |
+| e007 | stage-2 stacking | 0.9695 |
+| e008 | India script fixes (ZWJ strip, Indic legal abbrev, c-sound skeleton), k=100, max_k=40 | 0.9712 |
+| e009 | expanded stage-2 CARRY (50+ features) + per-region thresholds | 0.9713 |
+| e010 | char n-gram Jaccard (name+addr), initial-letter, first-token containment | 0.9716 |
+| **e011** | **3-seed LightGBM ensemble (seeds 42,13,7) with all e010 features** | **0.9723** |
 
 - **Common false positives (wrong merges):** generated decoys — same name and street with a
   shifted house or unit number (`D.No.1-11-29/4` vs `/11`), especially when the S1 record has no
@@ -187,8 +201,9 @@ MIT/Apache-licensed models.
 | `src/ber/decide.py`, `metrics.py` | One-to-one resolution, thresholds, exact metric |
 | `src/ber/run_experiment.py`, `make_submission.py` | Training experiment; test outputs + validation |
 
-Reproduce: `python -m ber.train_pruner configs/exp/e008_india.yaml`, then
-`python -m ber.make_submission configs/exp/e008_india.yaml` (writes both files to `output/`).
+Reproduce final submission: `python -m ber.run_experiment configs/exp/e011_ensemble.yaml`,
+then `python -m ber.make_submission configs/exp/e011_ensemble.yaml` (writes both files to
+`output/`).
 
 ### B. Additional Results
 

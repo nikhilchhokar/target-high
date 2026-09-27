@@ -6,9 +6,27 @@ import numpy as np
 import pandas as pd
 
 # raw pair features carried into stage 2 alongside the group features
+# EXPANDED (e009): include the discriminative fuzzy / IDF / numeric features that
+# drive top gain in stage 1 but were missing from the original stage-2 CARRY.
 CARRY = ["sim_name_addr", "sim_name", "sim_addr", "n_tset", "a_tset", "num_signed_diff",
          "num_state", "a_missing", "chain_s1", "sib1_name_addr", "sib1_addr", "sib1_name",
-         "sib2_name_addr", "cand_src", "prune_rank", "n_nospace_partial"]
+         "sib2_name_addr", "cand_src", "prune_rank", "n_nospace_partial",
+         # New: top stage-1 gain features (e009)
+         "n_partial", "n_ratio", "n_nospace_ratio", "n_skel_ratio", "n_max_idf_unshared",
+         "n_idf_overlap", "n_jacc", "n_jw", "n_lev", "n_first_tok_eq", "n_contain",
+         "legal_state", "name_num_state", "num_jacc", "num_near", "num_unmatched_b",
+         "num_min_absdiff", "a_partial", "a_jacc", "postal_state", "postal_pref3",
+         "b_pmb_box", "unit_state", "unit_signed_diff", "landmark_both", "landmark_tset",
+         "n_tok_diff", "n_len_min", "n_len_diff", "a_len_min",
+         # Char n-gram features (e010) — handle transliteration + typos
+         "n_cng3_jacc", "n_cng3_intersect", "n_cng4_jacc",
+         "n_init_match", "n_first_in_second", "a_cng3_jacc",
+         # Competition / context from add_context
+         "ctx_rank_prune_score", "ctx_rank_n_tset", "ctx_rank_a_tset",
+         "ctx_gap_prune_score", "ctx_gap_n_tset", "ctx_gap_a_tset",
+         "ctx_n_cands", "ctx_n_hi_name", "ctx_src_count",
+         "rev_rank_prune_score", "rev_rank_sim_name_addr",
+         "rev_gap_prune_score", "rev_gap_sim_name_addr", "rev_n_s1"]
 
 
 def features(df: pd.DataFrame, p1: np.ndarray) -> pd.DataFrame:

@@ -94,7 +94,43 @@ def main():
         cache.mkdir(exist_ok=True)
         scored.to_parquet(cache / f"test_scores_{res['exp_id']}.parquet")  # re-decide later without recompute
         d = decide.prepare(scored, cfg["decision"].get("one_to_one", True))
-        mask = decide.select(d, res["t_first"], res["t_other"], res["t_extra"])
+        # ---- per-country threshold tuning on OOF (e009+)
+        # If the oof.parquet has country info, find the best per-country thresholds and
+        # fall back to the global threshold for countries without enough samples.
+        country_thr = {}
+        try:
+            oof = pd.read_parquet(Path(paths.get("results_dir", "results")) / cfg["exp_id"] / "oof.parquet")
+            truth_oof = io.load_ground_truth(Path(paths["data_dir"]) / "train" / "train_ground_truth.tsv",
+                                              oof.s1.unique().tolist())
+            s1_train = prep.load(cfg, "train", [1], ["entity_id", "bc"])
+            bc_map = dict(zip(s1_train.entity_id, s1_train.bc))
+            oof_country = oof.s1.map(bc_map).fillna("UNK").values
+            d_oof = decide.prepare(oof.assign(cand_src=oof.cand_src), cfg["decision"].get("one_to_one", True))
+            scorer_oof = decide.Scorer(d_oof, truth_oof)
+            grid = cfg["decision"]["grid"]
+            for c in sorted(set(oof_country)):
+                msk = oof_country == c
+                if msk.sum() < 200:
+                    continue
+                dc = d_oof[msk].copy().reset_index(drop=True)
+                sc = decide.Scorer(dc, {k: v for k, v in truth_oof.items()
+                                        if bc_map.get(k, "UNK") == c})
+                best_c, _ = decide.grid_search(dc, sc, grid)
+                country_thr[c] = (best_c["t_first"], best_c["t_other"], best_c["t_extra"])
+                print(f"[per-country] {c}: t_first={country_thr[c][0]} t_other={country_thr[c][1]} "
+                      f"t_extra={country_thr[c][2]} (pairs={msk.sum()})", flush=True)
+        except Exception as e:
+            print(f"[per-country] tuning failed, falling back to global thresholds: {e}")
+
+        # Apply per-country thresholds on test
+        s1_test = prep.load(cfg, "test", [1], ["entity_id", "bc"])
+        test_bc_map = dict(zip(s1_test.entity_id, s1_test.bc))
+        d_country = d.s1.map(test_bc_map).fillna("UNK").values
+        mask = np.zeros(len(d), bool)
+        for c in np.unique(d_country):
+            m = d_country == c
+            t1, t2, t3 = country_thr.get(c, (res["t_first"], res["t_other"], res["t_extra"]))
+            mask[m] = decide.select(d[m].reset_index(drop=True), t1, t2, t3)
         match_map = decide.to_map(d, mask)
         cand_map = d.groupby("s1", sort=False).cand.apply(list).to_dict()
         sub_id = res["exp_id"]

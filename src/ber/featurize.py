@@ -108,6 +108,24 @@ def features_chunk(P: pd.DataFrame, idf: dict) -> pd.DataFrame:
     F["n_tok_diff"] = np.abs(np.array([len(x.split()) for x in na]) - np.array([len(x.split()) for x in nb]))
     F["b_name_indic"] = P.b_name_indic.astype(np.int8).values
     F["a_name_indic"] = P.a_name_indic.astype(np.int8).values
+    # Character n-gram Jaccard (e010): handles transliteration + typos where words differ
+    # but character overlap is high (e.g. 'Suyash Vtnturs' vs 'Suyash Ventures').
+    def _cngrams(s, n=3):
+        s = s.replace(" ", "")
+        return set(s[i:i + n] for i in range(len(s) - n + 1)) if len(s) >= n else set()
+    cn_a = [_cngrams(a) for a in na]
+    cn_b = [_cngrams(b) for b in nb]
+    F["n_cng3_jacc"] = [len(a & b) / max(len(a | b), 1) for a, b in zip(cn_a, cn_b)]
+    F["n_cng3_intersect"] = [len(a & b) for a, b in zip(cn_a, cn_b)]
+    cn_a4 = [_cngrams(a, 4) for a in na]
+    cn_b4 = [_cngrams(b, 4) for b in nb]
+    F["n_cng4_jacc"] = [len(a & b) / max(len(a | b), 1) for a, b in zip(cn_a4, cn_b4)]
+    # Initial-letter match (handles 'Tata Consultancy' vs 'TCS' etc.)
+    F["n_init_match"] = [float(bool(a) and bool(b) and a.split()[0][:1].lower() == b.split()[0][:1].lower())
+                         for a, b in zip(na, nb)]
+    # First token containment: 'TCS' in 'TCS Consulting Services'
+    F["n_first_in_second"] = [float(bool(a) and bool(b) and (a.split()[0] in b or b.split()[0] in a))
+                              for a, b in zip(na, nb)]
 
     aa, ab = P.a_addr_core.tolist(), P.b_addr_core.tolist()
     F["a_tset"] = [fuzz.token_set_ratio(a, b) for a, b in zip(aa, ab)]
@@ -133,6 +151,10 @@ def features_chunk(P: pd.DataFrame, idf: dict) -> pd.DataFrame:
     F["landmark_tset"] = [fuzz.token_set_ratio(a, b) if a and b else -1 for a, b in zip(P.a_landmark, P.b_landmark)]
     F["a_missing"] = [int(not a) + int(not b) for a, b in zip(aa, ab)]
     F["a_len_min"] = np.minimum([len(x) for x in aa], [len(x) for x in ab])
+    # Address character n-gram Jaccard (e010): 'ROLLING HDLLS' vs 'Rolling Hills' overlap
+    cn_aa = [_cngrams(a) for a in aa]
+    cn_ab = [_cngrams(b) for b in ab]
+    F["a_cng3_jacc"] = [len(a & b) / max(len(a | b), 1) for a, b in zip(cn_aa, cn_ab)]
     out = pd.DataFrame(F, index=P.index)
     return out.astype(np.float32)
 

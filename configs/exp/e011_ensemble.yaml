@@ -1,0 +1,6 @@
+inherit: e010_cngram.yaml
+exp_id: e011
+parent: e010
+note: "e010 + 3-seed ensemble (seeds 42,13,7) for variance reduction + calibration"
+model:
+  seeds: [42, 13, 7]

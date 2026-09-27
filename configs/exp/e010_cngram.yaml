@@ -1,0 +1,4 @@
+inherit: e009_stage2plus.yaml
+exp_id: e010
+parent: e009
+note: "e009 + char n-gram Jaccard (name+addr), initial-letter match, first-token containment — handles transliteration/typos"
