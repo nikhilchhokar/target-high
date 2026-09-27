@@ -29,9 +29,10 @@ def main():
     m = json.load(open(metrics_path))
     fcols = m["features"]
     s1 = pd.read_parquet(s1_path)
-    keep = set(s1.entity_id.sample(frac=0.4, random_state=0))
-    f = pd.read_parquet(feats_path, columns=["s1", "cand", "cand_src"] + [c for c in fcols if c != "cand_src"])
-    f = f[f.s1.isin(keep)].reset_index(drop=True)
+    keep = set(s1.entity_id.sample(frac=0.25, random_state=0))
+    # read only the sampled S1 rows (filter pushdown) so memory stays small
+    f = pd.read_parquet(feats_path, columns=["s1", "cand", "cand_src"] + [c for c in fcols if c != "cand_src"],
+                        filters=[("s1", "in", list(keep))]).reset_index(drop=True)
     cfg = pipeline.load_config("configs/base.yaml")
     truth = io.load_ground_truth(cfg["paths"]["data_dir"] + "/train/train_ground_truth.tsv", sorted(keep))
     country = f.s1.map(dict(zip(s1.entity_id, s1.bc))).values
@@ -40,12 +41,12 @@ def main():
     truth_in = {k: v for k, v in truth.items() if k in set(f.s1[te])}
     grid = {"t_first": [0.3, 0.8, 0.1], "t_other": [0.5, 0.9, 0.1], "t_extra": [0.6, 0.95, 0.05]}
     mcfg = {"params": {"learning_rate": 0.1, "num_leaves": 127, "min_child_samples": 100, "max_bin": 127,
-                       "feature_fraction": 0.8, "bagging_fraction": 0.7, "bagging_freq": 1, "n_jobs": 6},
+                       "feature_fraction": 0.8, "bagging_fraction": 0.7, "bagging_freq": 1, "n_jobs": 4},
             "seeds": [42]}
     scale_cols = [c for c in fcols if c.startswith(SCALE_PREFIX)]
     for name, cols in (("none", []), ("scale-dependent", scale_cols), ("all", fcols)):
         X = rank_within(f[fcols], country, cols) if cols else f[fcols]
-        ms = model.train_full(X[tr], y[tr], mcfg, 500)
+        ms = model.train_full(X[tr], y[tr], mcfg, 300)
         d = decide.prepare(f.loc[te, ["s1", "cand", "cand_src"]].assign(p=model.predict(ms, X[te])), True)
         sc = decide.Scorer(d, truth_in)
         best = decide.grid_search(d, sc, grid)[0]

@@ -50,6 +50,9 @@ def run(cfg: dict, write: bool = True) -> dict:
     t0 = time.time()
     y = np.fromiter((c in truth[s] for s, c in zip(feats.s1, feats.cand)), bool, len(feats)).astype(int)
     fcols = model.feature_cols(feats, cfg["model"].get("drop_features", []))
+    rmode = cfg["model"].get("rank_norm")
+    if rmode:  # per-country percentiles for scale-dependent features (transfer to unseen countries)
+        feats = model.rank_normalise(feats, model.rank_cols(fcols, rmode), feats.s1.map(s1_country).values)
     oof, iters, imp = model.train_oof(feats[fcols], y, feats.s1.values, cfg["model"])
     p1, iters2, s2cols = oof, [], []
     s2cfg = cfg["model"].get("stage2")

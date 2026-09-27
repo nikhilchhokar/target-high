@@ -8,6 +8,28 @@ import pandas as pd
 NON_FEATURES = {"qi", "pj", "s1", "cand", "y", "p"}
 
 
+RANK_SCALE_PREFIX = ("chain_", "sim_", "prune_score", "n_max_idf", "n_idf_overlap", "rev_n_s1", "ctx_n_",
+                     "ctx_gap_sim", "ctx_gap_prune", "rev_gap_prune", "rev_gap_sim", "hop_best")
+
+
+def rank_normalise(df: pd.DataFrame, cols, country) -> pd.DataFrame:
+    """Per-country percentile of scale-dependent features, so an unseen country (France) is
+    presented on the same scale as the training countries. In place on `cols`; returns df."""
+    country = np.asarray(country)
+    for c in cols:
+        if c in df:
+            df[c] = df[c].groupby(country).rank(pct=True).astype(np.float32).values
+    return df
+
+
+def rank_cols(fcols, mode):
+    if mode == "all":
+        return list(fcols)
+    if mode == "scale":
+        return [c for c in fcols if c.startswith(RANK_SCALE_PREFIX)]
+    return []
+
+
 def feature_cols(df: pd.DataFrame, drop=()) -> list:
     return [c for c in df.columns if c not in NON_FEATURES and c not in set(drop)]
 

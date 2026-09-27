@@ -66,6 +66,10 @@ def main():
             res = run_experiment.run(cfg, write=True)
         tr = pipeline.build_train(cfg)
         feats_tr, s1_tr = tr["feats"], tr["s1"]
+        rmode = cfg["model"].get("rank_norm")
+        if rmode:
+            feats_tr = model.rank_normalise(feats_tr, model.rank_cols(res["fcols"], rmode),
+                                            feats_tr.s1.map(dict(zip(s1_tr.entity_id, s1_tr.bc))).values)
         truth = io.load_ground_truth(Path(paths["data_dir"]) / "train" / "train_ground_truth.tsv",
                                      s1_tr.entity_id.tolist())
         y = np.fromiter((c in truth[s] for s, c in zip(feats_tr.s1, feats_tr.cand)), bool, len(feats_tr)).astype(int)
@@ -94,6 +98,8 @@ def main():
                 continue
             if len(f) == 0:
                 continue
+            if rmode:  # percentiles within this chunk's country (chunks never mix countries)
+                f = model.rank_normalise(f, model.rank_cols(res["fcols"], rmode), np.full(len(f), bc))
             p = model.predict(models, f[res["fcols"]]).astype(np.float32)
             if models2 is not None:
                 p = model.predict(models2, stage2.features(f, p)[res["s2cols"]]).astype(np.float32)
