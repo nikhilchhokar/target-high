@@ -53,13 +53,14 @@ def run(cfg: dict, write: bool = True) -> dict:
     rmode = cfg["model"].get("rank_norm")
     if rmode:  # per-country percentiles for scale-dependent features (transfer to unseen countries)
         feats = model.rank_normalise(feats, model.rank_cols(fcols, rmode), feats.s1.map(s1_country).values)
-    oof, iters, imp = model.train_oof(feats[fcols], y, feats.s1.values, cfg["model"])
+    w_rows = model.entity_weights(cfg["model"], feats.s1.values)
+    oof, iters, imp = model.train_oof(feats[fcols], y, feats.s1.values, cfg["model"], w_rows)
     p1, iters2, s2cols = oof, [], []
     s2cfg = cfg["model"].get("stage2")
     if s2cfg:  # stacked re-scoring from the stage-1 neighbourhood (same folds)
         F2 = stage2.features(feats, p1)
         s2cols = list(F2.columns)
-        oof, iters2, _ = model.train_oof(F2, y, feats.s1.values, {**cfg["model"], **s2cfg})
+        oof, iters2, _ = model.train_oof(F2, y, feats.s1.values, {**cfg["model"], **s2cfg}, w_rows)
         del F2
     feats = feats.assign(p=oof, p1=p1, y=y)
     t_train = time.time() - t0
@@ -70,6 +71,9 @@ def run(cfg: dict, write: bool = True) -> dict:
     one_to_one = dcfg.get("one_to_one", True)
     d = decide.prepare(feats, one_to_one)
     scorer = decide.Scorer(d, truth, dcfg.get("target_singleton_rate"))
+    if cfg["model"].get("weight_file"):  # tune thresholds on the test-like (density-weighted) mix
+        ew = model.entity_weights(cfg["model"], list(truth))
+        scorer.w = ew / ew.mean()
     print(f"[decide] grid search over thresholds ({len(d)} pairs)", flush=True)
     best, curve = decide.grid_search(d, scorer, dcfg["grid"])
     mask = decide.select(d, *_thr(best))

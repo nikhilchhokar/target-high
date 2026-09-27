@@ -75,7 +75,8 @@ def main():
                                      s1_tr.entity_id.tolist())
         y = np.fromiter((c in truth[s] for s, c in zip(feats_tr.s1, feats_tr.cand)), bool, len(feats_tr)).astype(int)
         n_iter = int(np.median(res["iters"]) * cfg["model"].get("full_iter_mult", 1.1))
-        models = model.train_full(feats_tr[res["fcols"]], y, cfg["model"], n_iter)
+        w_rows = model.entity_weights(cfg["model"], feats_tr.s1.values)
+        models = model.train_full(feats_tr[res["fcols"]], y, cfg["model"], n_iter, w_rows)
         models2 = None
         if cfg["model"].get("stage2") and res.get("iters2"):
             # stage 2 is trained on OUT-OF-FOLD stage-1 probabilities (as in validation)
@@ -83,7 +84,7 @@ def main():
             assert (oof.s1.values == feats_tr.s1.values).all()
             F2 = stage2.features(feats_tr, oof.p1.values)
             n2 = int(np.median(res["iters2"]) * cfg["model"].get("full_iter_mult", 1.1))
-            models2 = model.train_full(F2[res["s2cols"]], y, {**cfg["model"], **cfg["model"]["stage2"]}, n2)
+            models2 = model.train_full(F2[res["s2cols"]], y, {**cfg["model"], **cfg["model"]["stage2"]}, n2, w_rows)
             del F2, oof
         del feats_tr, tr
         scored = []

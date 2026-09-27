@@ -41,7 +41,7 @@ def _clf(params, seed, n_estimators=None):
     return lgb.LGBMClassifier(objective="binary", random_state=seed, verbose=-1, **p)
 
 
-def train_oof(X: pd.DataFrame, y: np.ndarray, groups: np.ndarray, mcfg: dict):
+def train_oof(X: pd.DataFrame, y: np.ndarray, groups: np.ndarray, mcfg: dict, w: np.ndarray = None):
     """Out-of-fold probabilities. Folds are grouped by S1 id so no entity leaks across folds."""
     seeds = mcfg.get("seeds", [42])
     cols = list(X.columns)
@@ -59,7 +59,8 @@ def train_oof(X: pd.DataFrame, y: np.ndarray, groups: np.ndarray, mcfg: dict):
             tr, va = np.where(fold_of_row != fold)[0], np.where(fold_of_row == fold)[0]
             t0 = time.time()
             m = _clf(mcfg["params"], seed)
-            m.fit(X[tr], y[tr], eval_X=(X[va],), eval_y=(y[va],), feature_name=cols,
+            m.fit(X[tr], y[tr], sample_weight=None if w is None else w[tr],
+                  eval_X=(X[va],), eval_y=(y[va],), feature_name=cols,
                   callbacks=[lgb.early_stopping(mcfg.get("early_stopping", 100), verbose=False)])
             oof[va] += m.predict_proba(X[va])[:, 1] / len(seeds)
             iters.append(int(m.best_iteration_ or mcfg["params"].get("n_estimators", 100)))
@@ -68,12 +69,21 @@ def train_oof(X: pd.DataFrame, y: np.ndarray, groups: np.ndarray, mcfg: dict):
     return oof, iters, (imp / imp.sum()).sort_values(ascending=False)
 
 
-def train_full(X, y, mcfg: dict, n_iter: int) -> list:
+def train_full(X, y, mcfg: dict, n_iter: int, w: np.ndarray = None) -> list:
     """Fit one model per seed on all training pairs with the CV-chosen iteration count."""
     cols = list(X.columns)
     Xn = X.to_numpy(np.float32)
-    return [_clf(mcfg["params"], s, n_estimators=n_iter).fit(Xn, y, feature_name=cols)
+    return [_clf(mcfg["params"], s, n_estimators=n_iter).fit(Xn, y, sample_weight=w, feature_name=cols)
             for s in mcfg.get("seeds", [42])]
+
+
+def entity_weights(cfg_model: dict, s1_ids) -> np.ndarray:
+    """Row weights from a per-S1 weight file (test-density matching); ones if not configured."""
+    path = cfg_model.get("weight_file")
+    if not path:
+        return None
+    wf = pd.read_parquet(path)
+    return pd.Series(np.asarray(s1_ids)).map(dict(zip(wf.s1, wf.w))).fillna(1.0).to_numpy(np.float32)
 
 
 def predict(models, X) -> np.ndarray:

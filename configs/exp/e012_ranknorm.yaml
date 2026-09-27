@@ -1,7 +1,0 @@
-inherit: e011_hop.yaml
-exp_id: e012
-parent: e011
-note: "e011 + per-country rank normalisation of scale-dependent features (France transfer)"
-model:
-  rank_norm: scale
-test_query_chunk: 100000

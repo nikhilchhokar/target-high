@@ -38,7 +38,8 @@ def main():
     country = f.s1.map(dict(zip(s1.entity_id, s1.bc))).values
     y = np.fromiter((c in truth[s] for s, c in zip(f.s1, f.cand)), bool, len(f)).astype(int)
     tr, te = country == "us", country == "in"
-    truth_in = {k: v for k, v in truth.items() if k in set(f.s1[te])}
+    te_ids = set(f.s1[te])
+    truth_in = {k: v for k, v in truth.items() if k in te_ids}
     grid = {"t_first": [0.3, 0.8, 0.1], "t_other": [0.5, 0.9, 0.1], "t_extra": [0.6, 0.95, 0.05]}
     mcfg = {"params": {"learning_rate": 0.1, "num_leaves": 127, "min_child_samples": 100, "max_bin": 127,
                        "feature_fraction": 0.8, "bagging_fraction": 0.7, "bagging_freq": 1, "n_jobs": 4},
