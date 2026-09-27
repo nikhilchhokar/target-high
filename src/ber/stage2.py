@@ -9,7 +9,7 @@ import pandas as pd
 CARRY = ["sim_name_addr", "sim_name", "sim_addr", "n_tset", "a_tset", "num_signed_diff",
          "num_state", "a_missing", "chain_s1", "sib1_name_addr", "sib1_addr", "sib1_name",
          "sib2_name_addr", "cand_src", "prune_rank", "n_nospace_partial", "legal_canon_state",
-         "n_full_tsort", "b_num1", "a_num1"]
+         "n_full_tsort", "b_num1", "a_num1", "is_hop", "hop_best"]
 
 
 def features(df: pd.DataFrame, p1: np.ndarray) -> pd.DataFrame:
@@ -38,6 +38,29 @@ def features(df: pd.DataFrame, p1: np.ndarray) -> pd.DataFrame:
     # source-wise: rank within same S1 and same source
     if "cand_src" in df:
         F["ss_rank"] = p.groupby([df.s1.values, df.cand_src.values]).rank(ascending=False, method="min")
+    # source cardinality: nearly every matched S1 has >=1 S3 copy (and usually >=1 S2), so a
+    # business with strong S2 copies but no strong S3 copy is probably missing one
+    if "cand_src" in df:
+        src = df.cand_src.values
+        strong5 = (p.values >= 0.5)
+        n2 = pd.Series(strong5 & (src == 2)).groupby(df.s1.values).transform("sum").values
+        n3 = pd.Series(strong5 & (src == 3)).groupby(df.s1.values).transform("sum").values
+        F["s_n_strong_s2"], F["s_n_strong_s3"] = n2, n3
+        F["own_src_strong"] = np.where(src == 2, n2, n3)
+        F["other_src_strong"] = np.where(src == 2, n3, n2)
+        best_in_src = p.groupby([df.s1.values, src]).rank(ascending=False, method="first").values == 1
+        F["best_in_empty_src"] = (best_in_src & (F["own_src_strong"].values == 0)).astype(np.float32)
+        F["p_best_in_src"] = p.groupby([df.s1.values, src]).transform("max").values
+    # name rival: the best name similarity between this candidate and any OTHER S1 retrieving it
+    # (multi-tenant buildings: the candidate may carry another S1's name at the same address)
+    if "n_tset" in df:
+        nt = pd.Series(df.n_tset.values.astype(np.float32), index=df.index)
+        hn = nt.groupby(df.cand.values)
+        nmx = hn.transform("max")
+        nsec = nt.where(nt < nmx).groupby(df.cand.values).transform("max").fillna(0)
+        n_top_cnt = (nt == nmx).groupby(df.cand.values).transform("sum")
+        other = np.where((nt >= nmx) & (n_top_cnt <= 1), nsec, nmx)
+        F["name_rival_margin"] = nt.values - other
     # sibling support weighted by the top candidate's probability
     if "sib1_name_addr" in df:
         F["sib_top_support"] = df.sib1_name_addr.fillna(0).values * mx.values

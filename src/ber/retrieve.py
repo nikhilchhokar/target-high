@@ -303,4 +303,53 @@ class CountryIndex:
         union = union.sort_values(["qi", "prune_score"], ascending=[True, False], kind="stable")
         union["prune_rank"] = (union.groupby("qi").cumcount() + 1).astype(np.int16)
         keep = (union.prune_rank <= prune.get("max_k", 15)) & (union.prune_score >= prune.get("min_score", 0.0))
-        return union.reset_index(drop=True), union[keep].reset_index(drop=True)
+        cands = union[keep].reset_index(drop=True)
+        if self.cfg.get("hop"):
+            cands = self._add_hops(cands, A, self.cfg["hop"])
+        return union.reset_index(drop=True), cands
+
+    def _add_hops(self, cands: pd.DataFrame, A: dict, hcfg: dict) -> pd.DataFrame:
+        """Second-hop retrieval: neighbours of the S1's likely-true copies ('anchors').
+
+        Copies of one business resemble EACH OTHER even when they drifted from the S1 record
+        (random name at the copy's exact address, name-only record with the copy's spelling),
+        so S1 -> anchor copy -> sibling copy recovers matches that S1 -> pool retrieval missed.
+        Adds at most `max_add` new candidates per S1, flagged with is_hop=1.
+        """
+        cands = cands.assign(is_hop=np.int8(0), hop_best=np.float32(0))
+        anc = cands[(cands.prune_rank <= hcfg.get("anchor_rank", 3))
+                    & (cands.sim_name_addr >= hcfg.get("anchor_min_sim", 0.6))]
+        if len(anc) == 0:
+            return cands
+        parts = []
+        for view in hcfg.get("views", ["name_addr", "addr", "name"]):
+            if view not in self.B:
+                continue
+            C = sp_matmul_topn(self.B[view][anc.pj.values], self.B[view], top_n=hcfg.get("k", 8),
+                               threshold=hcfg.get("min_sim", 0.5), sort=True, n_threads=self.threads).tocsr()
+            rows = np.repeat(np.arange(C.shape[0]), np.diff(C.indptr))
+            parts.append(pd.DataFrame({"qi": anc.qi.values[rows], "pj": C.indices.astype(np.int64),
+                                       "anchor": anc.pj.values[rows], "hop": C.data.astype(np.float32)}))
+        hop = pd.concat(parts, ignore_index=True)
+        hop = hop[hop.pj.values != hop.anchor.values]
+        hop = hop.groupby(["qi", "pj"], as_index=False).hop.max()
+        hop = hop.merge(cands[["qi", "pj"]].assign(_c=1), on=["qi", "pj"], how="left")
+        hop = hop[hop._c.isna()].drop(columns="_c")
+        hop = hop.sort_values(["qi", "hop"], ascending=[True, False], kind="stable")
+        hop = hop[hop.groupby("qi").cumcount() < hcfg.get("max_add", 5)].reset_index(drop=True)
+        if len(hop) == 0:
+            return cands
+        qi, pj = hop.qi.values, hop.pj.values
+        new = pd.DataFrame({"qi": qi, "pj": pj})
+        for r in self.cfg["retrievers"]:
+            new[f"rank_{r['name']}"] = np.int16(r["k"] + 1)
+        for v in self.vecs:
+            new[f"sim_{v}"] = _rowwise_dot(A[v], self.B[v], qi, pj)
+        new["n_retr"] = np.int8(0)
+        new["prune_score"] = np.float32(0)
+        max_k = self.cfg.get("prune", {}).get("max_k", 15)
+        new["prune_rank"] = (max_k + 1 + hop.groupby("qi").cumcount().values).astype(np.int16)
+        new["is_hop"] = np.int8(1)
+        new["hop_best"] = hop.hop.values
+        out = pd.concat([cands, new[cands.columns]], ignore_index=True)
+        return out.sort_values(["qi", "prune_rank"], kind="stable").reset_index(drop=True)

@@ -53,34 +53,51 @@ def _input_sig(cfg, split):
     return [(p.name, p.stat().st_size) for p in sorted(d.glob("*.tsv"))]
 
 
-def _country_runs(cfg, split, s1_all, q_filter=None):
-    """Yield (bc, query_chunk, union, feats) for each country and query chunk."""
+def _chunk_bounds(q: pd.DataFrame, qchunk: int):
+    """Region-aligned chunk boundaries (competing S1 of one region are scored together)."""
+    bounds, start = [], 0
+    reg_end = q.groupby("region", sort=False).size().cumsum().values
+    for e in reg_end:
+        if e - start >= qchunk:
+            bounds.append((start, e))
+            start = e
+    if start < len(q):
+        bounds.append((start, len(q)))
+    return bounds
+
+
+def _country_runs(cfg, split, s1_all, q_filter=None, skip=None):
+    """Yield (bc, query_chunk, union, feats, tag) for each country and query chunk.
+
+    tag = ('done'|'skip', s, e). skip(bc, s, e) -> True marks a chunk as already scored (resumable
+    test runs): it is yielded with union=feats=None, and a fully-done country is not indexed.
+    """
     bcfg = cfg["blocking"]
     workers, threads = cfg.get("workers", 7), cfg.get("threads", 7)
     qchunk = bcfg.get("query_chunk", 200_000)
     for bc in sorted(s1_all.bc.unique()):
         t0 = time.time()
-        pool = prep.load(cfg, split, [2, 3], Q_COLS, bc=bc)
         s1c = s1_all[s1_all.bc == bc]
-        if bc == "fr" and cfg.get("fr_admin_cleanup", True):  # region/departement noise (see fr_admin.py)
-            pool, s1c = fr_admin.clean_frame(pool), fr_admin.clean_frame(s1c)
         q = s1c if q_filter is None else s1c[s1c.entity_id.isin(q_filter)]
+        q = q.assign(region=retrieve.region_of(q)).sort_values("region", kind="stable").reset_index(drop=True)
+        bounds = _chunk_bounds(q, qchunk)
+        todo = [(s, e) for s, e in bounds if not (skip and skip(bc, s, e))]
+        for s, e in bounds:
+            if (s, e) not in todo:
+                yield bc, q.iloc[s:e].reset_index(drop=True), None, None, ("skip", s, e)
+        if not todo:
+            print(f"[resume] {split}/{bc}: all {len(bounds)} chunks already scored")
+            continue
+        pool = prep.load(cfg, split, [2, 3], Q_COLS, bc=bc)
+        if bc == "fr" and cfg.get("fr_admin_cleanup", True):  # region/departement noise (see fr_admin.py)
+            pool, s1c, q = fr_admin.clean_frame(pool), fr_admin.clean_frame(s1c), fr_admin.clean_frame(q)
         if len(pool) == 0 or len(q) == 0:
-            yield bc, q.reset_index(drop=True), None, None
+            yield bc, q, None, None, ("done", 0, len(q))
             continue
         idx = retrieve.CountryIndex(pool, s1c, bcfg, threads)
-        print(f"[index] {split}/{bc}: pool {len(pool)}, S1 {len(s1c)}, queries {len(q)} ({time.time() - t0:.0f}s)")
-        # chunk by region so competing S1 (same region) are scored together -> reverse features
-        q = q.assign(region=retrieve.region_of(q)).sort_values("region", kind="stable").reset_index(drop=True)
-        bounds, start = [], 0
-        reg_end = q.groupby("region", sort=False).size().cumsum().values
-        for e in reg_end:
-            if e - start >= qchunk:
-                bounds.append((start, e))
-                start = e
-        if start < len(q):
-            bounds.append((start, len(q)))
-        for s, e in bounds:
+        print(f"[index] {split}/{bc}: pool {len(pool)}, S1 {len(s1c)}, queries {len(q)}, "
+              f"chunks to do {len(todo)}/{len(bounds)} ({time.time() - t0:.0f}s)")
+        for s, e in todo:
             t1 = time.time()
             qq = q.iloc[s:e].reset_index(drop=True)
             union, cands = idx.query(qq)
@@ -90,8 +107,8 @@ def _country_runs(cfg, split, s1_all, q_filter=None):
             f.insert(1, "cand", ids_p[f.pj.values])
             union = union.assign(s1=ids_q[union.qi.values], cand=ids_p[union.pj.values])
             print(f"   {bc} queries {s}-{e}: union {len(union)}, cands {len(f)} "
-                  f"({time.time() - t1:.0f}s)")
-            yield bc, qq, union, f.drop(columns=["qi", "pj"])
+                  f"({time.time() - t1:.0f}s)", flush=True)
+            yield bc, qq, union, f.drop(columns=["qi", "pj"]), ("done", s, e)
         del idx, pool
 
 
@@ -153,7 +170,7 @@ def build_train(cfg: dict) -> dict:
     s1_all = prep.load(cfg, "train", [1], Q_COLS)
     sample_set = train_sample_ids(cfg, s1_all)
     feats, unions, n_pool = [], [], 0
-    for bc, qq, union, f in _country_runs(cfg, "train", s1_all, sample_set):
+    for bc, qq, union, f, _ in _country_runs(cfg, "train", s1_all, sample_set):
         if f is not None:
             feats.append(f)
             unions.append(union[["s1", "cand", "prune_rank"]])
@@ -170,12 +187,12 @@ def build_train(cfg: dict) -> dict:
     return out
 
 
-def iter_test(cfg: dict):
-    """Yield (bc, query_chunk, feats) over ALL test S1 entities."""
+def iter_test(cfg: dict, skip=None):
+    """Yield (bc, chunk_key, feats) over ALL test S1 entities; feats is None for skipped chunks."""
     prep.prep_split(cfg, "test")
     s1_all = prep.load(cfg, "test", [1], Q_COLS)
-    for bc, qq, union, f in _country_runs(cfg, "test", s1_all):
-        yield bc, qq, f
+    for bc, qq, union, f, tag in _country_runs(cfg, "test", s1_all, skip=skip):
+        yield bc, f"{bc}_{tag[1]}_{tag[2]}", f
 
 
 def load_raw(cfg: dict, split: str, ids) -> pd.DataFrame:

@@ -82,13 +82,24 @@ def main():
             del F2, oof
         del feats_tr, tr
         scored = []
-        for bc, qq, f in pipeline.iter_test(cfg):
-            if f is None or len(f) == 0:
+        # resumable: every scored chunk is saved; a restarted run reloads finished chunks
+        ck = Path(paths.get("cache_dir", "cache")) / f"test_chunks_{cfg['exp_id']}_{pipeline.stable_hash(cfg)}"
+        ck.mkdir(parents=True, exist_ok=True)
+        skip = lambda bc, s, e: (ck / f"{bc}_{s}_{e}.parquet").exists()
+        for bc, key, f in pipeline.iter_test(cfg, skip=skip):
+            path = ck / f"{key}.parquet"
+            if f is None:
+                if path.exists():
+                    scored.append(pd.read_parquet(path))
+                continue
+            if len(f) == 0:
                 continue
             p = model.predict(models, f[res["fcols"]]).astype(np.float32)
             if models2 is not None:
                 p = model.predict(models2, stage2.features(f, p)[res["s2cols"]]).astype(np.float32)
-            scored.append(f[["s1", "cand", "cand_src"]].assign(p=p))
+            out_chunk = f[["s1", "cand", "cand_src"]].assign(p=p)
+            out_chunk.to_parquet(path)
+            scored.append(out_chunk)
         scored = pd.concat(scored, ignore_index=True)
         cache = Path(paths.get("cache_dir", "cache"))
         cache.mkdir(exist_ok=True)

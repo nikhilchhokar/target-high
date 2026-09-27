@@ -1,0 +1,6 @@
+inherit: e010_consensus.yaml
+exp_id: e011
+parent: e010
+note: "e010 + second-hop retrieval from likely copies (<=5 extra/S1) + source-cardinality and name-rival stage-2 features"
+blocking:
+  hop: {anchor_rank: 3, anchor_min_sim: 0.6, views: [name_addr, addr, name], k: 8, min_sim: 0.5, max_add: 5}
